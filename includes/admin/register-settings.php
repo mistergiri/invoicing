@@ -27,14 +27,14 @@ function wpinv_update_option( $key = '', $value = false ) {
     // First let's grab the current settings
     $options = get_option( 'wpinv_settings' );
 
-    // Let's let devs alter that value coming in
+    // Let other plugin alter the value
     $value = apply_filters( 'wpinv_update_option', $value, $key );
 
     // Next let's try to update the value
     $options[ $key ] = $value;
     $did_update = update_option( 'wpinv_settings', $options );
 
-    // If it updated, let's update the global variable
+    // If it's updated, let's update the global variable
     if ( $did_update ) {
         global $wpinv_options;
         $wpinv_options[ $key ] = $value;
@@ -77,7 +77,7 @@ function wpinv_get_settings() {
         $gateways_settings  = is_array( get_option( 'wpinv_settings_gateways' ) )   ? get_option( 'wpinv_settings_gateways' )   : array();
         $email_settings     = is_array( get_option( 'wpinv_settings_emails' ) )     ? get_option( 'wpinv_settings_emails' )     : array();
         $tax_settings       = is_array( get_option( 'wpinv_settings_taxes' ) )      ? get_option( 'wpinv_settings_taxes' )      : array();
-        //$misc_settings    = is_array( get_option( 'wpinv_settings_misc' ) )       ? get_option( 'wpinv_settings_misc' )       : array();
+        $misc_settings      = is_array( get_option( 'wpinv_settings_misc' ) )       ? get_option( 'wpinv_settings_misc' )       : array();
         $tool_settings      = is_array( get_option( 'wpinv_settings_tools' ) )      ? get_option( 'wpinv_settings_tools' )      : array();
 
         $settings = array_merge( $general_settings, $gateways_settings, $tax_settings, $tool_settings );
@@ -165,8 +165,17 @@ function wpinv_get_registered_settings() {
     $due_payment_options[0]    = __( 'Now', 'invoicing' );
     for ( $i = 1; $i <= 30; $i++ ) {
         $due_payment_options[$i] = $i;
-    }    
+    }
     
+    $invoice_number_padd_options = array();
+    for ( $i = 0; $i <= 20; $i++ ) {
+        $invoice_number_padd_options[$i] = $i;
+    }
+    
+    $currency_symbol = wpinv_currency_symbol();
+    
+    $alert_wrapper_start = '<p style="color: #F00">';
+    $alert_wrapper_close = '</p>';
     $wpinv_settings = array(
         'general' => apply_filters( 'wpinv_settings_general',
             array(
@@ -193,6 +202,19 @@ function wpinv_get_registered_settings() {
                         'desc'    => __( 'What state / province does your store operate from?', 'invoicing' ),
                         'type'    => 'country_states',
                         'placeholder' => __( 'Select a state', 'invoicing' ),
+                    ),
+                    'store_name' => array(
+                        'id'   => 'store_name',
+                        'name' => __( 'Store Name', 'invoicing' ),
+                        'desc' => __( 'Store name to print on invoices.', 'invoicing' ),
+                        'std'     => get_option('blogname'),
+                        'type' => 'text',
+                    ),
+                    'logo' => array(
+                        'id'   => 'logo',
+                        'name' => __( 'Logo URL', 'invoicing' ),
+                        'desc' => __( 'Store logo to print on invoices.', 'invoicing' ),
+                        'type' => 'text',
                     ),
                     'store_address' => array(
                         'id'   => 'store_address',
@@ -236,7 +258,7 @@ function wpinv_get_registered_settings() {
                     'invoice_history_page' => array(
                         'id'          => 'invoice_history_page',
                         'name'        => __( 'Invoice History Page', 'invoicing' ),
-                        'desc'        => __( 'This page shows a invoice history for the current user', 'invoicing' ),
+                        'desc'        => __( 'This page shows an invoice history for the current user', 'invoicing' ),
                         'type'        => 'select',
                         'options'     => $pages,
                         'chosen'      => true,
@@ -264,10 +286,10 @@ function wpinv_get_registered_settings() {
                         'desc'    => __( 'Choose the location of the currency sign.', 'invoicing' ),
                         'type'    => 'select',
                         'options'  => array(
-                            'left'        => __( 'Left', 'invoicing' ) . ' (' . wpinv_currency_symbol() . '99.99)',
-                            'right'       => __( 'Right', 'invoicing' ) . ' (99.99' . wpinv_currency_symbol() . ')',
-                            'left_space'  => __( 'Left with space', 'invoicing' ) . ' (' . wpinv_currency_symbol() . ' 99.99)',
-                            'right_space' => __( 'Right with space', 'invoicing' ) . ' (99.99 ' . wpinv_currency_symbol() . ')'
+                            'left'        => __( 'Left', 'invoicing' ) . ' (' . $currency_symbol . wpinv_format_amount( '99.99' ) . ')',
+                            'right'       => __( 'Right', 'invoicing' ) . ' ('. wpinv_format_amount( '99.99' ) . $currency_symbol . ')',
+                            'left_space'  => __( 'Left with space', 'invoicing' ) . ' (' . $currency_symbol . ' ' . wpinv_format_amount( '99.99' ) . ')',
+                            'right_space' => __( 'Right with space', 'invoicing' ) . ' (' . wpinv_format_amount( '99.99' ) . ' ' . $currency_symbol . ')'
                         )
                     ),
                     'thousands_separator' => array(
@@ -315,15 +337,15 @@ function wpinv_get_registered_settings() {
                     ),
                     'vat_invoice_notice_label' => array(
                         'id' => 'vat_invoice_notice_label',
-                        'name' => __( 'Invoice notice label', 'invoicing' ),
-                        'desc' => __( 'Use this to add a invoice notice section (label) to your invoices', 'invoicing' ),
+                        'name' => __( 'Invoice Notice Label', 'invoicing' ),
+                        'desc' => __( 'Use this to add an invoice notice section (label) to your invoices', 'invoicing' ),
                         'type' => 'text',
                         'size' => 'regular',
                     ),
                     'vat_invoice_notice' => array(
                         'id' => 'vat_invoice_notice',
                         'name' => __( 'Invoice notice', 'invoicing' ),
-                        'desc' =>   __( 'Use this to add a invoice notice section (description) to your invoices', 'invoicing' ),
+                        'desc' =>   __( 'Use this to add an invoice notice section (description) to your invoices', 'invoicing' ),
                         'type' => 'text',
                         'size' => 'regular',
                     )
@@ -344,6 +366,7 @@ function wpinv_get_registered_settings() {
                         'name'    => __( 'Payment Gateways', 'invoicing' ),
                         'desc'    => __( 'Choose the payment gateways you want to enable.', 'invoicing' ),
                         'type'    => 'gateways',
+                        'std'     => array('manual'=>1),
                         'options' => wpinv_get_payment_gateways(),
                     ),
                     'default_gateway' => array(
@@ -351,6 +374,7 @@ function wpinv_get_registered_settings() {
                         'name'    => __( 'Default Gateway', 'invoicing' ),
                         'desc'    => __( 'This gateway will be loaded automatically with the checkout page.', 'invoicing' ),
                         'type'    => 'gateway_select',
+                        'std'     => 'manual',
                         'options' => wpinv_get_payment_gateways(),
                     ),
                 ),
@@ -379,7 +403,7 @@ function wpinv_get_registered_settings() {
                         'size' => 'small',
                         'min'  => '0',
                         'max'  => '99',
-                        'step' => '0.1',
+                        'step' => 'any',
                         'std'  => '20'
                     ),
                 ),
@@ -412,7 +436,7 @@ function wpinv_get_registered_settings() {
                     'email_from' => array(
                         'id'   => 'email_from',
                         'name' => __( 'From Email', 'invoicing' ),
-                        'desc' => __( 'Email address to send invoice emails from. This will act as the "from" and "reply-to" address.', 'invoicing' ),
+                        'desc' => sprintf (__( 'Email address to send invoice emails from. This will act as the "from" and "reply-to" address. %s If emails are not being sent it may be that your hosting prevents emails being sent if the email domains do not match.%s', 'invoicing' ), $alert_wrapper_start, $alert_wrapper_close),
                         'std' => get_option( 'admin_email' ),
                         'type' => 'text',
                     ),
@@ -431,7 +455,7 @@ function wpinv_get_registered_settings() {
                     'overdue_days' => array(
                         'id'          => 'overdue_days',
                         'name'        => __( 'Default Due Date', 'invoicing' ),
-                        'desc'        => __( 'Number of days each Invoice is due after the created date. This will automatically set the date in the "Due Date" field. Can be overriden on individual Invoices.', 'invoicing' ),
+                        'desc'        => __( 'Number of days each Invoice is due after the created date. This will automatically set the date in the "Due Date" field. Can be overridden on individual Invoices.', 'invoicing' ),
                         'type'        => 'select',
                         'options'     => $due_payment_options,
                         'chosen'      => true,
@@ -498,18 +522,128 @@ function wpinv_get_registered_settings() {
             )
         ),
         /** Misc Settings */
-        /*'misc' => apply_filters('wpinv_settings_misc',
+        'misc' => apply_filters('wpinv_settings_misc',
             array(
                 'main' => array(
-                    'misc_settings' => array(
-                        'id'   => 'misc_settings',
-                        'name' => '<h3>' . __( 'Misc Settings', 'invoicing' ) . '</h3>',
+                    'fields_settings' => array(
+                        'id'   => 'fields_settings',
+                        'name' => '<h3>' . __( 'Fields Settings', 'invoicing' ) . '</h3>',
+                        'desc' => __( 'Tick fields which are mandatory in invoice address fields.', 'invoicing' ),
                         'type' => 'header',
+                    ),
+                    'fname_mandatory' => array(
+                        'id'   => 'fname_mandatory',
+                        'name' => __( 'First Name', 'invoicing' ),
+                        'type' => 'checkbox',
+                        'std'  => true,
+                    ),
+                    'lname_mandatory' => array(
+                        'id'   => 'lname_mandatory',
+                        'name' => __( 'Last Name', 'invoicing' ),
+                        'type' => 'checkbox',
+                        'std'  => true,
+                    ),
+                    'address_mandatory' => array(
+                        'id'   => 'address_mandatory',
+                        'name' => __( 'Address', 'invoicing' ),
+                        'type' => 'checkbox',
+                        'std'  => true,
+                    ),
+                    'city_mandatory' => array(
+                        'id'   => 'city_mandatory',
+                        'name' => __( 'City', 'invoicing' ),
+                        'type' => 'checkbox',
+                        'std'  => true,
+                    ),
+                    'country_mandatory' => array(
+                        'id'   => 'country_mandatory',
+                        'name' => __( 'Country', 'invoicing' ),
+                        'type' => 'checkbox',
+                        'std'  => true,
+                    ),
+                    'state_mandatory' => array(
+                        'id'   => 'state_mandatory',
+                        'name' => __( 'State / Province', 'invoicing' ),
+                        'type' => 'checkbox',
+                        'std'  => true,
+                    ),
+                    'zip_mandatory' => array(
+                        'id'   => 'zip_mandatory',
+                        'name' => __( 'ZIP / Postcode', 'invoicing' ),
+                        'type' => 'checkbox',
+                        'std'  => true,
+                    ),
+                    'phone_mandatory' => array(
+                        'id'   => 'phone_mandatory',
+                        'name' => __( 'Phone Number', 'invoicing' ),
+                        'type' => 'checkbox',
+                        'std'  => true,
+                    ),
+                    'invoice_number_format_settings' => array(
+                        'id'   => 'invoice_number_format_settings',
+                        'name' => '<h3>' . __( 'Invoice Number', 'invoicing' ) . '</h3>',
+                        'type' => 'header',
+                    ),
+                    'sequential_invoice_number' => array(
+                        'id'   => 'sequential_invoice_number',
+                        'name' => __( 'Sequential Invoice Numbers', 'invoicing' ),
+                        'desc' => __( 'Check this box to enable sequential invoice numbers.', 'invoicing' ),
+                        'type' => 'checkbox',
+                    ),
+                    'invoice_sequence_start' => array(
+                        'id'   => 'invoice_sequence_start',
+                        'name' => __( 'Sequential Starting Number', 'easy-digital-downloads' ),
+                        'desc' => __( 'The number at which the invoice number sequence should begin.', 'invoicing' ),
+                        'type' => 'number',
+                        'size' => 'small',
+                        'std'  => '1',
+                        'class'=> 'w100'
+                    ),
+                    'invoice_number_padd' => array(
+                        'id'      => 'invoice_number_padd',
+                        'name'    => __( 'Minimum Digits', 'invoicing' ),
+                        'desc'    => __( 'If the invoice number has less digits than this number, it is left padded with 0s. Ex: invoice number 108 will padded to 00108 if digits set to 5. The default 0 means no padding.', 'invoicing' ),
+                        'type'    => 'select',
+                        'options' => $invoice_number_padd_options,
+                        'std'     => 5,
+                        'chosen'  => true,
+                    ),
+                    'invoice_number_prefix' => array(
+                        'id' => 'invoice_number_prefix',
+                        'name' => __( 'Invoice Number Prefix', 'invoicing' ),
+                        'desc' => __( 'Prefix for all invoice numbers. Ex: WPINV-', 'invoicing' ),
+                        'type' => 'text',
+                        'size' => 'regular',
+                        'std' => 'WPINV-',
+                        'placeholder' => 'WPINV-',
+                    ),
+                    'invoice_number_postfix' => array(
+                        'id' => 'invoice_number_postfix',
+                        'name' => __( 'Invoice Number Postfix', 'invoicing' ),
+                        'desc' => __( 'Postfix for all invoice numbers.', 'invoicing' ),
+                        'type' => 'text',
+                        'size' => 'regular',
+                        'std' => ''
+                    ),
+                    'guest_checkout_settings' => array(
+                        'id'   => 'guest_checkout_settings',
+                        'name' => '<h3>' . __( 'Pay via Invoice Link', 'invoicing' ) . '</h3>',
+                        'type' => 'header',
+                    ),
+                    'guest_checkout' => array(
+                        'type'    => 'radio',
+                        'id'      => 'guest_checkout',
+                        'name'    => __( 'Pay via Invoice Link for non logged in user', 'invoicing' ),
+                        'desc'    => __( 'Select how invoice should be paid when non logged in user clicks on the invoice link sent to them via email to pay for invoice.', 'invoicing' ),
+                        'options' => array(
+                            0 => __( 'Ask them to log-in and redirect back to invoice checkout to pay.', 'invoicing' ),
+                            1 => __( 'Auto log-in the user via invoice link and take them to invoice checkout to pay.', 'invoicing' ),
+                        ),
+                        'std'     => 0,
                     ),
                 ),
             )
         ),
-        */
         /** Misc Settings */
         'tools' => apply_filters('wpinv_settings_tools',
             array(
@@ -618,6 +752,8 @@ function wpinv_settings_sanitize_tax_rates( $input ) {
                 continue;
             }
             
+            $rate['rate'] = wpinv_sanitize_amount( $rate['rate'], 4 );
+            
             $tax_rates[] = $rate;
         }
     }
@@ -639,7 +775,7 @@ function wpinv_get_settings_tabs() {
     $tabs['gateways'] = __( 'Payment Gateways', 'invoicing' );
     $tabs['taxes']    = __( 'Taxes', 'invoicing' );
     $tabs['emails']   = __( 'Emails', 'invoicing' );
-    //$tabs['misc']   = __( 'Misc', 'invoicing' );
+    $tabs['misc']     = __( 'Misc', 'invoicing' );
     $tabs['tools']    = __( 'Tools', 'invoicing' );
 
     return apply_filters( 'wpinv_settings_tabs', $tabs );
@@ -905,10 +1041,11 @@ function wpinv_text_callback( $args ) {
 	} else {
 		$name = 'name="wpinv_settings[' . esc_attr( $args['id'] ) . ']"';
 	}
+	$class = !empty( $args['class'] ) ? sanitize_html_class( $args['class'] ) : '';
 
 	$readonly = $args['readonly'] === true ? ' readonly="readonly"' : '';
 	$size     = ( isset( $args['size'] ) && ! is_null( $args['size'] ) ) ? $args['size'] : 'regular';
-	$html     = '<input type="text" class="' . sanitize_html_class( $size ) . '-text" id="wpinv_settings[' . $sanitize_id . ']" ' . $name . ' value="' . esc_attr( stripslashes( $value ) ) . '"' . $readonly . '/>';
+	$html     = '<input type="text" class="' . sanitize_html_class( $size ) . '-text ' . $class . '" id="wpinv_settings[' . $sanitize_id . ']" ' . $name . ' value="' . esc_attr( stripslashes( $value ) ) . '"' . $readonly . '/>';
 	$html    .= '<label for="wpinv_settings[' . $sanitize_id . ']"> '  . wp_kses_post( $args['desc'] ) . '</label>';
 
 	echo $html;
@@ -936,9 +1073,10 @@ function wpinv_number_callback( $args ) {
 	$max  = isset( $args['max'] ) ? $args['max'] : 999999;
 	$min  = isset( $args['min'] ) ? $args['min'] : 0;
 	$step = isset( $args['step'] ) ? $args['step'] : 1;
+	$class = !empty( $args['class'] ) ? sanitize_html_class( $args['class'] ) : '';
 
 	$size = ( isset( $args['size'] ) && ! is_null( $args['size'] ) ) ? $args['size'] : 'regular';
-	$html = '<input type="number" step="' . esc_attr( $step ) . '" max="' . esc_attr( $max ) . '" min="' . esc_attr( $min ) . '" class="' . sanitize_html_class( $size ) . '-text" id="wpinv_settings[' . $sanitize_id . ']" ' . $name . ' value="' . esc_attr( stripslashes( $value ) ) . '"/>';
+	$html = '<input type="number" step="' . esc_attr( $step ) . '" max="' . esc_attr( $max ) . '" min="' . esc_attr( $min ) . '" class="' . sanitize_html_class( $size ) . '-text ' . $class . '" id="wpinv_settings[' . $sanitize_id . ']" ' . $name . ' value="' . esc_attr( stripslashes( $value ) ) . '"/>';
 	$html .= '<label for="wpinv_settings[' . $sanitize_id . ']"> '  . wp_kses_post( $args['desc'] ) . '</label>';
 
 	echo $html;
@@ -1222,7 +1360,7 @@ function wpinv_tax_rates_callback($args) {
 					<input type="checkbox" name="tax_rates[<?php echo $sanitized_key; ?>][global]" id="tax_rates[<?php echo $sanitized_key; ?>][global]" value="1"<?php checked( true, ! empty( $rate['global'] ) ); ?>/>
 					<label for="tax_rates[<?php echo $sanitized_key; ?>][global]"><?php _e( 'Apply to whole country', 'invoicing' ); ?></label>
 				</td>
-				<td class="wpinv_tax_rate"><input type="number" class="small-text" step="0.10" min="0.00" max="99" name="tax_rates[<?php echo $sanitized_key; ?>][rate]" value="<?php echo esc_html( $rate['rate'] ); ?>"/></td>
+				<td class="wpinv_tax_rate"><input type="number" class="small-text" step="any" min="0" max="99" name="tax_rates[<?php echo $sanitized_key; ?>][rate]" value="<?php echo esc_html( $rate['rate'] ); ?>"/></td>
                 <td class="wpinv_tax_name"><input type="text" class="regular-text" name="tax_rates[<?php echo $sanitized_key; ?>][name]" value="<?php echo esc_html( $rate['name'] ); ?>"/></td>
 				<td class="wpinv_tax_action"><span class="wpinv_remove_tax_rate button-secondary"><?php _e( 'Remove Rate', 'invoicing' ); ?></span></td>
 			</tr>
@@ -1250,7 +1388,7 @@ function wpinv_tax_rates_callback($args) {
 					<input type="checkbox" name="tax_rates[0][global]" id="tax_rates[0][global]" value="1"/>
 					<label for="tax_rates[0][global]"><?php _e( 'Apply to whole country', 'invoicing' ); ?></label>
 				</td>
-				<td class="wpinv_tax_rate"><input type="number" class="small-text" step="0.10" min="0.00" name="tax_rates[0][rate]" placeholder="<?php echo (float)wpinv_get_option( 'tax_rate', 0 ) ;?>" value="<?php echo (float)wpinv_get_option( 'tax_rate', 0 ) ;?>"/></td>
+				<td class="wpinv_tax_rate"><input type="number" class="small-text" step="any" min="0" max="99" name="tax_rates[0][rate]" placeholder="<?php echo (float)wpinv_get_option( 'tax_rate', 0 ) ;?>" value="<?php echo (float)wpinv_get_option( 'tax_rate', 0 ) ;?>"/></td>
                 <td class="wpinv_tax_name"><input type="text" class="regular-text" name="tax_rates[0][name]" /></td>
 				<td><span class="wpinv_remove_tax_rate button-secondary"><?php _e( 'Remove Rate', 'invoicing' ); ?></span></td>
 			</tr>
@@ -1298,3 +1436,13 @@ function wpinv_set_settings_cap() {
 	return 'manage_options';
 }
 add_filter( 'option_page_capability_wpinv_settings', 'wpinv_set_settings_cap' );
+
+function wpinv_settings_sanitize_input( $value, $key ) {
+    if ( $key == 'tax_rate' || $key == 'eu_fallback_rate' ) {
+        $value = wpinv_sanitize_amount( $value, 4 );
+        $value = $value >= 100 ? 99 : $value;
+    }
+        
+    return $value;
+}
+add_filter( 'wpinv_settings_sanitize', 'wpinv_settings_sanitize_input', 10, 2 );

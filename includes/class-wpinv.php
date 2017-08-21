@@ -68,6 +68,8 @@ class WPInv_Plugin {
          * @param WPInv_Plugin $this. Current WPInv_Plugin instance. Passed by reference.
          */
         do_action_ref_array( 'wpinv_actions', array( &$this ) );
+
+        add_action( 'admin_init', array( &$this, 'activation_redirect') );
     }
     
     public function plugins_loaded() {
@@ -113,7 +115,10 @@ class WPInv_Plugin {
         require_once( WPINV_PLUGIN_DIR . 'includes/wpinv-user-functions.php' );
         require_once( WPINV_PLUGIN_DIR . 'includes/wpinv-gd-functions.php' );
         require_once( WPINV_PLUGIN_DIR . 'includes/wpinv-error-functions.php' );
+        //require_once( WPINV_PLUGIN_DIR . 'includes/class-wpinv-db.php' );
+        //require_once( WPINV_PLUGIN_DIR . 'includes/class-wpinv-subscriptions-db.php' );
         require_once( WPINV_PLUGIN_DIR . 'includes/class-wpinv-invoice.php' );
+        //require_once( WPINV_PLUGIN_DIR . 'includes/class-wpinv-subscription.php' );
         require_once( WPINV_PLUGIN_DIR . 'includes/class-wpinv-item.php' );
         require_once( WPINV_PLUGIN_DIR . 'includes/class-wpinv-notes.php' );
         require_once( WPINV_PLUGIN_DIR . 'includes/class-wpinv-session.php' );
@@ -141,14 +146,17 @@ class WPInv_Plugin {
         }
         require_once( WPINV_PLUGIN_DIR . 'includes/gateways/manual.php' );
         
-        if ( is_admin() ) {
+        if ( is_admin() || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+            require_once( WPINV_PLUGIN_DIR . 'includes/admin/wpinv-upgrade-functions.php' );
             require_once( WPINV_PLUGIN_DIR . 'includes/admin/wpinv-admin-functions.php' );
             require_once( WPINV_PLUGIN_DIR . 'includes/admin/admin-meta-boxes.php' );
+            //require_once( WPINV_PLUGIN_DIR . 'includes/admin/class-wpinv-recurring-admin.php' );
             require_once( WPINV_PLUGIN_DIR . 'includes/admin/meta-boxes/class-mb-invoice-details.php' );
             require_once( WPINV_PLUGIN_DIR . 'includes/admin/meta-boxes/class-mb-invoice-items.php' );
             require_once( WPINV_PLUGIN_DIR . 'includes/admin/meta-boxes/class-mb-invoice-notes.php' );
             require_once( WPINV_PLUGIN_DIR . 'includes/admin/meta-boxes/class-mb-invoice-address.php' );
             require_once( WPINV_PLUGIN_DIR . 'includes/admin/admin-pages.php' );
+            //require_once( WPINV_PLUGIN_DIR . 'includes/admin/subscriptions.php' );
         }
         
         // include css inliner
@@ -167,6 +175,24 @@ class WPInv_Plugin {
         }
         
         add_action( 'admin_print_scripts-edit.php', array( &$this, 'admin_print_scripts_edit_php' ) );
+    }
+
+    public function activation_redirect() {
+        // Bail if no activation redirect
+        if ( !get_transient( '_wpinv_activation_redirect' ) ) {
+            return;
+        }
+
+        // Delete the redirect transient
+        delete_transient( '_wpinv_activation_redirect' );
+
+        // Bail if activating from network, or bulk
+        if ( is_network_admin() || isset( $_GET['activate-multi'] ) ) {
+            return;
+        }
+
+        wp_safe_redirect( admin_url( 'admin.php?page=wpinv-settings&tab=general' ) );
+        exit;
     }
     
     public function enqueue_scripts() {
@@ -188,8 +214,8 @@ class WPInv_Plugin {
         $localize['nonce']                = wp_create_nonce( 'wpinv-nonce' );
         $localize['currency_symbol']      = wpinv_currency_symbol();
         $localize['currency_pos']         = wpinv_currency_position();
-        $localize['thousand_sep']         = wpinv_thousands_seperator();
-        $localize['decimal_sep']          = wpinv_decimal_seperator();
+        $localize['thousand_sep']         = wpinv_thousands_separator();
+        $localize['decimal_sep']          = wpinv_decimal_separator();
         $localize['decimals']             = wpinv_decimals();
         
         $localize = apply_filters( 'wpinv_front_js_localize', $localize );
@@ -248,30 +274,36 @@ class WPInv_Plugin {
         $localize['discount']                   = wpinv_discount_amount();
         $localize['currency_symbol']            = wpinv_currency_symbol();
         $localize['currency_pos']               = wpinv_currency_position();
-        $localize['thousand_sep']               = wpinv_thousands_seperator();
-        $localize['decimal_sep']                = wpinv_decimal_seperator();
+        $localize['thousand_sep']               = wpinv_thousands_separator();
+        $localize['decimal_sep']                = wpinv_decimal_separator();
         $localize['decimals']                   = wpinv_decimals();
         $localize['save_invoice']               = __( 'Save Invoice', 'invoicing' );
         $localize['status_publish']             = wpinv_status_nicename( 'publish' );
-        $localize['status_pending']             = wpinv_status_nicename( 'pending' );
+        $localize['status_pending']             = wpinv_status_nicename( 'wpi-pending' );
         $localize['delete_tax_rate']            = __( 'Are you sure you wish to delete this tax rate?', 'invoicing' );
         $localize['OneItemMin']                 = __( 'Invoice must contain at least one item', 'invoicing' );
         $localize['DeleteInvoiceItem']          = __( 'Are you sure you wish to delete this item?', 'invoicing' );
         $localize['FillBillingDetails']         = __( 'Fill the user\'s billing information? This will remove any currently entered billing information', 'invoicing' );
         $localize['confirmCalcTotals']          = __( 'Recalculate totals? This will recalculate totals based on the user billing country. If no billing country is set it will use the base country.', 'invoicing' );
         $localize['AreYouSure']                 = __( 'Are you sure?', 'invoicing' );
-        $localize['hasGD']                      = wpinv_gd_active();;
+        $localize['hasGD']                      = wpinv_gd_active();
         $localize['hasPM']                      = wpinv_pm_active();
         $localize['emptyInvoice']               = __( 'Add atleast one item to save invoice!', 'invoicing' );
         $localize['deletePackage']              = __( 'GD package items should be deleted from GD payment manager only, otherwise it will break invoices that created with this package!', 'invoicing' );
         $localize['deletePackages']             = __( 'GD package items should be deleted from GD payment manager only', 'invoicing' );
         $localize['deleteInvoiceFirst']         = __( 'This item is in use! Before delete this item, you need to delete all the invoice(s) using this item.', 'invoicing' );
-        
+
+        $localize = apply_filters( 'wpinv_admin_js_localize', $localize );
+
         wp_localize_script( 'wpinv-admin-script', 'WPInv_Admin', $localize );
     }
     
     public function admin_body_class( $classes ) {
-        global $pagenow;
+        global $pagenow, $post, $current_screen;
+        
+        if ( !empty( $current_screen->post_type ) && ( $current_screen->post_type == 'wpi_invoice' || $current_screen->post_type == 'wpi_quote' ) ) {
+            $classes .= ' wpinv-cpt';
+        }
         
         $page = isset( $_GET['page'] ) ? strtolower( $_GET['page'] ) : false;
 
@@ -298,22 +330,20 @@ class WPInv_Plugin {
         }
         
         $post_type = wpinv_admin_post_type();
-        
-        if ( $post_type == 'wpi_invoice' || $add_class !== false ) {
+
+        if ( $post_type == 'wpi_invoice' || $post_type == 'wpi_quote' || $add_class !== false ) {
             return $classes .= ' wpinv';
-        } else {
-            return $classes;
+        }
+        
+        if ( $pagenow == 'post.php' && $post_type == 'wpi_item' && !empty( $post ) && !wpinv_item_is_editable( $post ) ) {
+            $classes .= ' wpi-editable-n';
         }
 
         return $classes;
     }
     
     public function admin_print_scripts_edit_php() {
-        $post_type = wpinv_admin_post_type();
-        
-        if ( $post_type == 'wpi_item' ) {
-            wp_enqueue_script( 'wpinv-inline-edit-post', WPINV_PLUGIN_URL . 'assets/js/quick-edit.js', array( 'jquery', 'inline-edit-post' ), '', true );
-        }
+
     }
     
     public function wpinv_actions() {

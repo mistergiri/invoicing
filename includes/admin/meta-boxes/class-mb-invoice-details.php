@@ -22,6 +22,14 @@ class WPInv_Meta_Box_Details {
         $date_created       = $date_created != '' && $date_created != '0000-00-00 00:00:00' ? date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $datetime_created ) : '';
         $date_completed     = $invoice->get_completed_date();
         $date_completed     = $date_completed != '' && $date_completed != '0000-00-00 00:00:00' ? date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $date_completed ) ) : 'n/a';
+        $title['status'] = __( 'Invoice Status:', 'invoicing' );
+        $title['number'] = __( 'Invoice Number:', 'invoicing' );
+        $mail_notice = esc_attr__( 'After saving invoice, this will send a copy of the invoice to the user&#8217;s email address.', 'invoicing' );
+        
+        $title = apply_filters('wpinv_details_metabox_titles', $title, $invoice);
+        $statuses = apply_filters('wpinv_invoice_statuses', $statuses, $invoice);
+        $mail_notice = apply_filters('wpinv_metabox_mail_notice', $mail_notice, $invoice);
+        $post_obj = get_post_type_object($invoice->post_type);
         ?>
 <div class="gdmbx2-wrap form-table">
     <div class="gdmbx2-metabox gdmbx-field-list" id="gdmbx2-metabox-wpinv_details">
@@ -44,7 +52,7 @@ class WPInv_Meta_Box_Details {
         </div>
         <?php } ?>
         <div class="gdmbx-row gdmbx-type-select gdmbx2-id-wpinv-status">
-            <div class="gdmbx-th"><label for="wpinv_status"><?php _e( 'Invoice Status:', 'invoicing' );?></label></div>
+            <div class="gdmbx-th"><label for="wpinv_status"><?php echo $title['status']; ?></label></div>
             <div class="gdmbx-td">
                 <select required="required" id="wpinv_status" name="wpinv_status" class="gdmbx2_select">
                     <?php foreach ( $statuses as $value => $label ) { ?>
@@ -54,9 +62,9 @@ class WPInv_Meta_Box_Details {
             </div>
         </div>
         <div class="gdmbx-row gdmbx-type-text gdmbx2-id-wpinv-number table-layout">
-            <div class="gdmbx-th"><label for="wpinv_number"><?php _e( 'Invoice Number:', 'invoicing' );?></label></div>
+            <div class="gdmbx-th"><label for="wpinv_number"><?php echo $title['number']; ?></label></div>
             <div class="gdmbx-td">
-                <input type="text" placeholder="<?php esc_attr_e( 'WPINV-0001', 'invoicing' );?>" value="<?php echo esc_attr( $invoice_number );?>" id="wpinv_number" name="wpinv_number" class="regular-text">
+                <input type="text" value="<?php echo esc_attr( $invoice_number );?>" id="wpinv_number" name="wpinv_number" class="regular-text" readonly>
             </div>
         </div>
         <?php do_action( 'wpinv_meta_box_details_inner', $post_id ); ?>
@@ -71,13 +79,13 @@ class WPInv_Meta_Box_Details {
     </div>
 </div>
 <div class="gdmbx-row gdmbx-type-text gdmbx-wpinv-save-send table-layout">
-    <p class="wpi-meta-row wpi-save-send"><label for="wpi_save_send"><?php _e( 'Send Invoice:', 'invoicing' ); ?></label>
+    <p class="wpi-meta-row wpi-save-send"><label for="wpi_save_send"><?php echo sprintf(__( 'Send %s:', 'invoicing' ),$post_obj->labels->singular_name) ; ?></label>
         <select id="wpi_save_send" name="wpi_save_send">
             <option value="1"><?php _e( 'Yes', 'invoicing' ); ?></option>
             <option value="" selected="selected"><?php _e( 'No', 'invoicing' ); ?></option>
         </select>
     </p>
-    <p class="wpi-meta-row wpi-send-info"><?php esc_attr_e( 'After save invoice this will send a copy of the invoice to the user&#8217;s email address.', 'invoicing' ); ?></p>
+    <p class="wpi-meta-row wpi-send-info"><?php echo $mail_notice; ?></p>
 </div>
 <?php wp_nonce_field( 'wpinv_details', 'wpinv_details_nonce' ) ;?>
         <?php
@@ -90,16 +98,25 @@ class WPInv_Meta_Box_Details {
             return;
         }
         
+        $text = array(
+            'message'       => esc_attr__( 'This will send a copy of the invoice to the customer&#8217;s email address.', 'invoicing' ),
+            'button_text'   =>  __( 'Resend Invoice', 'invoicing' ),
+        );
+            
+        $text = apply_filters('wpinv_resend_invoice_metabox_text', $text);
         do_action( 'wpinv_metabox_resend_invoice_before', $wpi_mb_invoice );
         
         if ( $email = $wpi_mb_invoice->get_email() ) {
-            $email_url      = add_query_arg( array( 'wpi_action' => 'send_invoice', 'invoice_id' => $post->ID ) );
-            $reminder_url   = add_query_arg( array( 'wpi_action' => 'send_reminder', 'invoice_id' => $post->ID ) );
+            $email_actions = array();
+            $email_actions['email_url']      = add_query_arg( array( 'wpi_action' => 'send_invoice', 'invoice_id' => $post->ID ) );
+            $email_actions['reminder_url']   = add_query_arg( array( 'wpi_action' => 'send_reminder', 'invoice_id' => $post->ID ) );
+            
+            $email_actions = apply_filters('wpinv_resend_invoice_email_actions', $email_actions );
         ?>
-        <p class="wpi-meta-row wpi-resend-info"><?php esc_attr_e( 'This will send a copy of the invoice to the user&#8217;s email address.', 'invoicing' ); ?></p>
-        <p class="wpi-meta-row wpi-resend-email"><a title="<?php esc_attr_e( 'Send invoice to customer', 'invoicing' ); ?>" href="<?php echo esc_url( $email_url ); ?>" class="button button-secondary"><?php esc_attr_e( 'Resend Invoice', 'invoicing' ); ?></a></p>
-        <?php if ( wpinv_get_option( 'overdue_active' ) && $wpi_mb_invoice->needs_payment() && ( $due_date = $wpi_mb_invoice->get_due_date() ) ) { ?>
-        <p class="wpi-meta-row wpi-send-reminder"><a title="<?php esc_attr_e( 'Send overdue reminder notification to customer', 'invoicing' ); ?>" href="<?php echo esc_url( $reminder_url ); ?>" class="button button-secondary"><?php esc_attr_e( 'Send Reminder', 'invoicing' ); ?></a></p>
+        <p class="wpi-meta-row wpi-resend-info"><?php echo $text['message']; ?></p>
+        <p class="wpi-meta-row wpi-resend-email"><a href="<?php echo esc_url( $email_actions['email_url'] ); ?>" class="button button-secondary"><?php echo $text['button_text']; ?></a></p>
+        <?php if ( wpinv_get_option( 'overdue_active' ) && "wpi_invoice" === $wpi_mb_invoice->post_type && $wpi_mb_invoice->needs_payment() && ( $due_date = $wpi_mb_invoice->get_due_date() ) ) { ?>
+        <p class="wpi-meta-row wpi-send-reminder"><a title="<?php esc_attr_e( 'Send overdue reminder notification to customer', 'invoicing' ); ?>" href="<?php echo esc_url( $email_actions['reminder_url'] ); ?>" class="button button-secondary"><?php esc_attr_e( 'Send Reminder', 'invoicing' ); ?></a></p>
         <?php } ?>
         <?php
         }
@@ -117,9 +134,10 @@ class WPInv_Meta_Box_Details {
             
             $total_payments = (int)$invoice->get_total_payments();
             $subscription   = $invoice->get_subscription_data();
-            
-            $billing_cycle  = wpinv_get_billing_cycle( $subscription['initial_amount'], $subscription['recurring_amount'], $subscription['period'], $subscription['interval'], $subscription['bill_times'], $invoice->get_currency() );
+
+            $billing_cycle  = wpinv_get_billing_cycle( $subscription['initial_amount'], $subscription['recurring_amount'], $subscription['period'], $subscription['interval'], $subscription['bill_times'], $subscription['trial_period'], $subscription['trial_interval'], $invoice->get_currency() );
             $times_billed   = $total_payments . ' / ' . ( ( (int)$subscription['bill_times'] == 0 ) ? __( 'Until cancelled', 'invoicing' ) : $subscription['bill_times'] );
+            $subscription_status = $invoice->get_subscription_status();
             ?>
             <p class="wpi-meta-row wpi-sub-label"><?php _e( 'Recurring Payment', 'invoicing' );?></p>
             <?php if ( $subscription_id = $invoice->get_subscription_id() ) { ?>
@@ -130,6 +148,15 @@ class WPInv_Meta_Box_Details {
             <?php if ( !empty( $payments ) || $invoice->is_paid() ) { ?>
                 <p class="wpi-meta-row wpi-start-date"><label><?php _e( 'Start Date:', 'invoicing' );?> </label><?php echo $invoice->get_subscription_start(); ?></p>
                 <p class="wpi-meta-row wpi-end-date"><label><?php _e( 'Expiration Date:', 'invoicing' );?> </label><?php echo $invoice->get_subscription_end(); ?></p>
+                <?php if ( $status_label = $invoice->get_subscription_status_label( $subscription_status ) ) { ?>
+                <p class="wpi-meta-row wpi-sub-status"><label><?php _e( 'Subscription Status:', 'invoicing' );?> </label><?php echo $status_label; ?></p>
+                <?php } ?>
+                <?php if ( $subscription_status == 'trialing' && $trial_end_date = $invoice->get_trial_end_date() ) { ?>
+                <p class="wpi-meta-row wpi-trial-date"><label><?php _e( 'Trial Until:', 'invoicing' );?> </label><?php echo $trial_end_date; ?></p>
+                <?php } ?>
+                <?php if ( $cancelled_date = $invoice->get_cancelled_date() ) { ?>
+                <p class="wpi-meta-row wpi-cancel-date"><label><?php _e( 'Cancelled On:', 'invoicing' );?> </label><?php echo $cancelled_date; ?></p>
+                <?php } ?>
                 <?php if ( !empty( $payments ) ) { ?>
                 <p><strong><?php _e( 'Renewal Payments:', 'invoicing' ); ?></strong></p>
                 <ul id="wpi-sub-payments">

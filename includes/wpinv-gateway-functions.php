@@ -19,11 +19,6 @@ function wpinv_get_payment_gateways() {
             'checkout_label' => __( 'PayPal Standard', 'invoicing' ),
             'ordering'       => 1,
         ),
-        '2co' => array(
-            'admin_label'    => __( '2Checkout', 'invoicing' ),
-            'checkout_label' => __( '2Checkout - Credit Card / Debit Card', 'invoicing' ),
-            'ordering'       => 2,
-        ),
         'authorizenet' => array(
             'admin_label'    => __( 'Authorize.Net (AIM)', 'invoicing' ),
             'checkout_label' => __( 'Authorize.Net - Credit Card / Debit Card', 'invoicing' ),
@@ -282,6 +277,10 @@ function wpinv_show_gateways() {
             $show_gateways = false;
         }
     }
+    
+    if ( !$show_gateways && wpinv_cart_has_recurring_item() ) {
+        $show_gateways = true;
+    }
 
     return apply_filters( 'wpinv_show_gateways', $show_gateways );
 }
@@ -486,6 +485,7 @@ add_filter( 'wpinv_gateway_settings_bank_transfer', 'wpinv_gateway_settings_bank
 
 // Authorize.Net settings
 function wpinv_gateway_settings_authorizenet( $setting ) {
+    $setting['authorizenet_active']['desc'] = $setting['authorizenet_active']['desc'] . ' ' . __( '( currencies supported: AUD, CAD, CHF, DKK, EUR, GBP, JPY, NOK, NZD, PLN, SEK, USD, ZAR )', 'invoicing' );
     $setting['authorizenet_desc']['std'] = __( 'Pay using a Authorize.Net to process credit card / debit card transactions.', 'invoicing' );
     
     $setting['authorizenet_sandbox'] = array(
@@ -500,7 +500,7 @@ function wpinv_gateway_settings_authorizenet( $setting ) {
             'type' => 'text',
             'id'   => 'authorizenet_login_id',
             'name' => __( 'API Login ID', 'invoicing' ),
-            'desc' => __( 'Enter your Authorize.Net login id. Example : 2j4rBekUnD', 'invoicing' ),
+            'desc' => __( 'API Login ID can be obtained from Authorize.Net Account > Settings > Security Settings > General Security Settings > API Credentials & Keys. Example : 2j4rBekUnD', 'invoicing' ),
             'std' => '2j4rBekUnD',
         );
     
@@ -508,8 +508,27 @@ function wpinv_gateway_settings_authorizenet( $setting ) {
             'type' => 'text',
             'id'   => 'authorizenet_transaction_key',
             'name' => __( 'Transaction Key', 'invoicing' ),
-            'desc' => __( 'Enter your Authorize.Net transaction key. Example : 4vyBUOJgR74679xa', 'invoicing' ),
+            'desc' => __( 'Transaction Key can be obtained from Authorize.Net Account > Settings > Security Settings > General Security Settings > API Credentials & Keys. Example : 4vyBUOJgR74679xa', 'invoicing' ),
             'std' => '4vyBUOJgR74679xa',
+        );
+        
+    $setting['authorizenet_md5_hash'] = array(
+            'type' => 'text',
+            'id'   => 'authorizenet_md5_hash',
+            'name' => __( 'MD5-Hash', 'invoicing' ),
+            'desc' => __( 'The MD5 Hash security feature allows you to authenticate transaction responses from the Authorize.Net. If you are accepting recurring payments then md5 hash will helps to validate response from Authorize.net. It can be obtained from Authorize.Net Account > Settings > Security Settings > General Settings > MD5 Hash.', 'invoicing' ),
+            'std' => '',
+        );
+        
+    $setting['authorizenet_ipn_url'] = array(
+            'type' => 'ipn_url',
+            'id'   => 'authorizenet_ipn_url',
+            'name' => __( 'Silent Post URL', 'invoicing' ),
+            'std' => wpinv_get_ipn_url( 'authorizenet' ),
+            'desc' => __( 'If you are accepting recurring payments then you must set this url at Authorize.Net Account > Settings > Transaction Format Settings > Transaction Response Settings > Silent Post URL.', 'invoicing' ),
+            'size' => 'large',
+            'custom' => 'authorizenet',
+            'readonly' => true
         );
         
     return $setting;
@@ -570,39 +589,6 @@ function wpinv_ipn_url_callback( $args ) {
 
     echo $html;
 }
-
-// 2Checkout Settings
-function wpinv_gateway_settings_2co( $setting ) {
-    $setting['2co_sandbox'] = array(
-            'type' => 'checkbox',
-            'id'   => '2co_sandbox',
-            'name' => __( '2Checkout Sandbox', 'invoicing' ),
-            'desc' => __( '2Checkout sandbox can be used to test payments.', 'invoicing' ),
-            'std'  => 1
-        );
-        
-    $setting['2co_vendor_id'] = array(
-            'type' => 'text',
-            'id'   => '2co_vendor_id',
-            'name' => __( '2Checkout Account ID', 'invoicing' ),
-            'desc' => __( 'Enter your 2Checkout account id. Example : 1303908', 'invoicing' ),
-            'std' => '1303908',
-        );
-
-    $setting['2co_ipn_url'] = array(
-            'type' => 'ipn_url',
-            'id'   => '2co_ipn_url',
-            'name' => __( '2Checkout IPN Url', 'invoicing' ),
-            'std' => wpinv_get_ipn_url( '2co' ),
-            'desc' => __( 'Configure Instant Payment Notifications(IPN) url at 2Checkout.', 'invoicing' ),
-            'size' => 'large',
-            'custom' => '2co',
-            'readonly' => true
-        );
-        
-    return $setting;
-}
-add_filter( 'wpinv_gateway_settings_2co', 'wpinv_gateway_settings_2co', 10, 1 );
 
 function wpinv_is_test_mode( $gateway = '' ) {
     if ( empty( $gateway ) ) {
@@ -673,11 +659,18 @@ function wpinv_process_before_send_to_gateway( $invoice, $invoice_data = array()
     if ( !empty( $invoice ) && $invoice->is_recurring() && $subscription_item = $invoice->get_recurring( true ) ) {        
         $args                          = array();
         $args['item_id']               = $subscription_item->ID;
-        $args['initial_amount']        = wpinv_format_amount( $invoice->get_total() );
-        $args['recurring_amount']      = wpinv_format_amount( $invoice->get_recurring_details( 'total' ) );
+        $args['initial_amount']        = wpinv_round_amount( $invoice->get_total() );
+        $args['recurring_amount']      = wpinv_round_amount( $invoice->get_recurring_details( 'total' ) );
         $args['currency']              = $invoice->get_currency();
-        $args['period']                = $subscription_item->get_recurring_period( true );
+        $args['period']                = $subscription_item->get_recurring_period();
         $args['interval']              = $subscription_item->get_recurring_interval();
+        if ( $subscription_item->has_free_trial() ) {
+            $args['trial_period']      = $subscription_item->get_trial_period();
+            $args['trial_interval']    = $subscription_item->get_trial_interval();
+        } else {
+            $args['trial_period']      = '';
+            $args['trial_interval']    = 0;
+        }
         $args['bill_times']            = (int)$subscription_item->get_recurring_limit();
         
         $invoice->update_subscription( $args );

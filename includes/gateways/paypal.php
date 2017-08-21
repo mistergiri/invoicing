@@ -21,7 +21,7 @@ function wpinv_process_paypal_payment( $purchase_data ) {
         'user_info'     => $purchase_data['user_info'],
         'cart_details'  => $purchase_data['cart_details'],
         'gateway'       => 'paypal',
-        'status'        => !empty( $purchase_data['buy_now'] ) ? 'private' : 'pending'
+        'status'        => 'wpi-pending'
     );
 
     // Record the pending payment
@@ -64,7 +64,8 @@ function wpinv_process_paypal_payment( $purchase_data ) {
             'cancel_return' => wpinv_get_failed_transaction_uri( '?invoice-id=' . $invoice->ID ),
             'notify_url'    => $listener_url,
             'cbt'           => get_bloginfo( 'name' ),
-            'bn'            => 'WPInvoicing_SP'
+            'bn'            => 'WPInvoicing_SP',
+	        'lc'            => 'US' // this will force paypal site to english
         );
 
         $paypal_args['address1'] = $invoice->get_address();
@@ -85,7 +86,7 @@ function wpinv_process_paypal_payment( $purchase_data ) {
         if( is_array( $purchase_data['cart_details'] ) && ! empty( $purchase_data['cart_details'] ) ) {
             foreach ( $purchase_data['cart_details'] as $item ) {
                 $item['quantity'] = $item['quantity'] > 0 ? $item['quantity'] : 1;
-                $item_amount = round( $item['subtotal'] / $item['quantity'], 2 );
+                $item_amount = wpinv_sanitize_amount( $item['subtotal'] / $item['quantity'], 2 );
 
                 if ( $item_amount <= 0 ) {
                     $item_amount = 0;
@@ -95,7 +96,7 @@ function wpinv_process_paypal_payment( $purchase_data ) {
                 $paypal_args['item_name_' . $i ]        = stripslashes_deep( html_entity_decode( wpinv_get_cart_item_name( $item ), ENT_COMPAT, 'UTF-8' ) );
                 $paypal_args['quantity_' . $i ]         = $item['quantity'];
                 $paypal_args['amount_' . $i ]           = $item_amount;
-                $paypal_args['discount_amount_' . $i ]  = $item['discount'];
+                $paypal_args['discount_amount_' . $i ]  = wpinv_sanitize_amount( $item['discount'], 2 );
 
                 $i++;
             }
@@ -103,7 +104,7 @@ function wpinv_process_paypal_payment( $purchase_data ) {
 
         // Add taxes to the cart
         if ( wpinv_use_taxes() ) {
-            $paypal_args['tax_cart'] = wpinv_sanitize_amount( (float)$invoice->get_tax() );
+            $paypal_args['tax_cart'] = wpinv_sanitize_amount( (float)$invoice->get_tax(), 2 );
         }
 
         $paypal_args = apply_filters( 'wpinv_paypal_args', $paypal_args, $purchase_data, $invoice );
@@ -136,8 +137,8 @@ function wpinv_get_paypal_recurring_args( $paypal_args, $purchase_data, $invoice
         $interval           = $item->get_recurring_interval();
         $bill_times         = (int)$item->get_recurring_limit();
         
-        $initial_amount     = wpinv_format_amount( $invoice->get_total() );
-        $recurring_amount   = wpinv_format_amount( $invoice->get_recurring_details( 'total' ) );
+        $initial_amount     = wpinv_sanitize_amount( $invoice->get_total(), 2 );
+        $recurring_amount   = wpinv_sanitize_amount( $invoice->get_recurring_details( 'total' ), 2 );
         
         $paypal_args['cmd'] = '_xclick-subscriptions';
         $paypal_args['sra'] = '1';
@@ -146,7 +147,14 @@ function wpinv_get_paypal_recurring_args( $paypal_args, $purchase_data, $invoice
         // Set item description
         $paypal_args['item_name']   = stripslashes_deep( html_entity_decode( wpinv_get_cart_item_name( array( 'id' => $item->ID ) ), ENT_COMPAT, 'UTF-8' ) );
         
-        if ( $initial_amount != $recurring_amount && $bill_times != 1 ) {
+        if ( $invoice->is_free_trial() && $item->has_free_trial() ) {
+            $paypal_args['a1']  = $initial_amount;
+            $paypal_args['p1']  = $item->get_trial_interval();
+            $paypal_args['t1']  = $item->get_trial_period();
+            
+            // Set the recurring amount
+            $paypal_args['a3']  = $recurring_amount;
+        } else if ( $initial_amount != $recurring_amount && $bill_times != 1 ) {
             $paypal_args['a1']  = $initial_amount;
             $paypal_args['p1']  = $interval;
             $paypal_args['t1']  = $period;
@@ -157,7 +165,7 @@ function wpinv_get_paypal_recurring_args( $paypal_args, $purchase_data, $invoice
             if ( $bill_times > 1 ) {
                 $bill_times--;
             }
-        } else {        
+        } else {
             $paypal_args['a3']  = $initial_amount;
         }
         
@@ -310,6 +318,8 @@ function wpinv_process_paypal_ipn() {
 	$encoded_data_array = wp_parse_args( $encoded_data_array, $defaults );
 
 	$invoice_id = isset( $encoded_data_array['custom'] ) ? absint( $encoded_data_array['custom'] ) : 0;
+    
+	wpinv_error_log( $encoded_data_array['txn_type'], 'PayPal txn_type', __FILE__, __LINE__ );
 
 	if ( has_action( 'wpinv_paypal_' . $encoded_data_array['txn_type'] ) ) {
 		// Allow PayPal IPN types to be processed separately
@@ -346,7 +356,7 @@ function wpinv_process_paypal_web_accept_and_cart( $data, $invoice_id ) {
 	// Verify payment recipient
 	if ( strcasecmp( $business_email, trim( wpinv_get_option( 'paypal_email', false ) ) ) != 0 ) {
 		wpinv_record_gateway_error( __( 'IPN Error', 'invoicing' ), sprintf( __( 'Invalid business email in IPN response. IPN data: %s', 'invoicing' ), json_encode( $data ) ), $invoice_id );
-		wpinv_update_payment_status( $invoice_id, 'failed' );
+		wpinv_update_payment_status( $invoice_id, 'wpi-failed' );
 		wpinv_insert_payment_note( $invoice_id, __( 'Payment failed due to invalid PayPal business email.', 'invoicing' ) );
 		return;
 	}
@@ -354,7 +364,7 @@ function wpinv_process_paypal_web_accept_and_cart( $data, $invoice_id ) {
 	// Verify payment currency
 	if ( $currency_code != strtolower( $payment_meta['currency'] ) ) {
 		wpinv_record_gateway_error( __( 'IPN Error', 'invoicing' ), sprintf( __( 'Invalid currency in IPN response. IPN data: %s', 'invoicing' ), json_encode( $data ) ), $invoice_id );
-		wpinv_update_payment_status( $invoice_id, 'failed' );
+		wpinv_update_payment_status( $invoice_id, 'wpi-failed' );
 		wpinv_insert_payment_note( $invoice_id, __( 'Payment failed due to invalid currency in PayPal IPN.', 'invoicing' ) );
 		return;
 	}
@@ -364,7 +374,7 @@ function wpinv_process_paypal_web_accept_and_cart( $data, $invoice_id ) {
 		// No email associated with purchase, so store from PayPal
 		wpinv_update_invoice_meta( $invoice_id, '_wpinv_email', $data['payer_email'] );
 
-		// Setup and store the customers's details
+		// Setup and store the customer's details
 		$user_info = array(
 			'user_id'    => '-1',
 			'email'      => sanitize_text_field( $data['payer_email'] ),
@@ -396,23 +406,23 @@ function wpinv_process_paypal_web_accept_and_cart( $data, $invoice_id ) {
 		if ( number_format( (float) $paypal_amount, 2 ) < number_format( (float) $payment_amount, 2 ) ) {
 			// The prices don't match
 			wpinv_record_gateway_error( __( 'IPN Error', 'invoicing' ), sprintf( __( 'Invalid payment amount in IPN response. IPN data: %s', 'invoicing' ), json_encode( $data ) ), $invoice_id );
-			wpinv_update_payment_status( $invoice_id, 'failed' );
+			wpinv_update_payment_status( $invoice_id, 'wpi-failed' );
 			wpinv_insert_payment_note( $invoice_id, __( 'Payment failed due to invalid amount in PayPal IPN.', 'invoicing' ) );
 			return;
 		}
 		if ( $purchase_key != wpinv_get_payment_key( $invoice_id ) ) {
 			// Purchase keys don't match
 			wpinv_record_gateway_error( __( 'IPN Error', 'invoicing' ), sprintf( __( 'Invalid purchase key in IPN response. IPN data: %s', 'invoicing' ), json_encode( $data ) ), $invoice_id );
-			wpinv_update_payment_status( $invoice_id, 'failed' );
+			wpinv_update_payment_status( $invoice_id, 'wpi-failed' );
 			wpinv_insert_payment_note( $invoice_id, __( 'Payment failed due to invalid purchase key in PayPal IPN.', 'invoicing' ) );
 			return;
 		}
 
-		if ( 'complete' == $payment_status || wpinv_is_test_mode( 'paypal' ) ) {
+		if ( 'complete' == $payment_status || 'completed' == $payment_status || 'processed' == $payment_status || wpinv_is_test_mode( 'paypal' ) ) {
 			wpinv_insert_payment_note( $invoice_id, sprintf( __( 'PayPal Transaction ID: %s', 'invoicing' ) , $data['txn_id'] ) );
 			wpinv_set_payment_transaction_id( $invoice_id, $data['txn_id'] );
 			wpinv_update_payment_status( $invoice_id, 'publish' );
-		} else if ( 'pending' == $payment_status && isset( $data['pending_reason'] ) ) {
+		} else if ( 'wpi-pending' == $payment_status && isset( $data['pending_reason'] ) ) {
 			// Look for possible pending reasons, such as an echeck
 			$note = '';
 
@@ -458,6 +468,8 @@ function wpinv_process_paypal_web_accept_and_cart( $data, $invoice_id ) {
 			if ( ! empty( $note ) ) {
 				wpinv_insert_payment_note( $invoice_id, $note );
 			}
+		} else {
+			wpinv_insert_payment_note( $invoice_id, wp_sprintf( __( 'PayPal IPN has been received with invalid payment status: %s', 'invoicing' ), $payment_status ) );
 		}
 	}
 }
@@ -478,6 +490,70 @@ add_action( 'wpinv_paypal_subscr_eot', 'wpinv_process_paypal_subscr_eot' );
 // Process PayPal payment failed
 add_action( 'wpinv_paypal_subscr_failed', 'wpinv_process_paypal_subscr_failed' );
 
+
+/**
+ * Process the subscription started IPN.
+ */
+function wpinv_process_paypal_subscr_signup( $ipn_data ) {
+    $parent_invoice_id = absint( $ipn_data['custom'] );
+    if( empty( $parent_invoice_id ) ) {
+        return;
+    }
+
+    $invoice = wpinv_get_invoice( $parent_invoice_id );
+    if ( empty( $invoice ) ) {
+        return;
+    }
+
+    if ( $invoice->is_free_trial() && !empty( $ipn_data['invoice'] ) ) {
+        wpinv_insert_payment_note( $parent_invoice_id, sprintf( __( 'PayPal Invoice ID: %s', 'invoicing' ) , $ipn_data['invoice'] ) );
+        wpinv_set_payment_transaction_id( $parent_invoice_id, $ipn_data['invoice'] );
+    }
+    
+    wpinv_update_payment_status( $parent_invoice_id, 'publish' );
+    sleep(1);
+    wpinv_insert_payment_note( $parent_invoice_id, sprintf( __( 'PayPal Subscription ID: %s', 'invoicing' ) , $ipn_data['subscr_id'] ) );
+    
+    $subscription = wpinv_get_paypal_subscription( $ipn_data );
+    if ( false === $subscription ) {
+        return;
+    }
+
+    $cart_details   = $invoice->cart_details;
+
+    if ( !empty( $cart_details ) ) {
+        foreach ( $cart_details as $cart_item ) {
+            $item = new WPInv_Item( $cart_item['id'] );
+            
+            $status = $invoice->is_free_trial() && $item->has_free_trial() ? 'trialing' : 'active';
+            
+            $args = array(
+                'item_id'           => $cart_item['id'],
+                'status'            => $status,
+                'period'            => $item->get_recurring_period(),
+                'initial_amount'    => $invoice->get_total(),
+                'recurring_amount'  => $invoice->get_recurring_details( 'total' ),
+                'interval'          => $item->get_recurring_interval(),
+                'bill_times'        => $item->get_recurring_limit(),
+                'expiration'        => $invoice->get_new_expiration( $cart_item['id'] ),
+                'profile_id'        => $ipn_data['subscr_id'],
+                'created'           => date_i18n( 'Y-m-d H:i:s', strtotime( $ipn_data['subscr_date'] ) )
+            );
+            
+            if ( $item->has_free_trial() ) {
+                $args['trial_period']      = $item->get_trial_period();
+                $args['trial_interval']    = $item->get_trial_interval();
+            } else {
+                $args['trial_period']      = '';
+                $args['trial_interval']    = 0;
+            }
+            
+
+            $subscription->update_subscription( $args );
+        }
+    }
+}
+
 /**
  * Process the subscription payment received IPN.
  */
@@ -491,10 +567,13 @@ function wpinv_process_paypal_subscr_payment( $ipn_data ) {
     
     $transaction_id = wpinv_get_payment_transaction_id( $parent_invoice_id );
     $signup_date    = strtotime( $subscription->get_subscription_created() );
-    $today          = date_i18n( 'Y-n-d', $signup_date ) == date_i18n( 'Y-n-d', strtotime( $ipn_data['payment_date'] ) );
+    $today          = date_i18n( 'Y-m-d', $signup_date ) == date_i18n( 'Y-m-d', strtotime( $ipn_data['payment_date'] ) );
 
-    // Look to see if payment is same day as signup and we have set the transaction ID on the parent payment yet
+    // Look to see if payment is same day as signup and we have set the transaction ID on the parent payment yet.
     if ( $today && ( !$transaction_id || $transaction_id == $parent_invoice_id ) ) {
+        wpinv_update_payment_status( $parent_invoice_id, 'publish' );
+        sleep(1);
+        
         // This is the very first payment
         wpinv_set_payment_transaction_id( $parent_invoice_id, $ipn_data['txn_id'] );
         wpinv_insert_payment_note( $parent_invoice_id, sprintf( __( 'PayPal Transaction ID: %s', 'invoicing' ) , $ipn_data['txn_id'] ) );
@@ -502,7 +581,7 @@ function wpinv_process_paypal_subscr_payment( $ipn_data ) {
     }
     
     if ( wpinv_get_id_by_transaction_id( $ipn_data['txn_id'] ) ) {
-        return; // Payment alreay recorded
+        return; // Payment already recorded
     }
 
     $currency_code = strtolower( $ipn_data['mc_currency'] );
@@ -526,54 +605,6 @@ function wpinv_process_paypal_subscr_payment( $ipn_data ) {
         wpinv_insert_payment_note( $invoice->ID, sprintf( __( 'PayPal Transaction ID: %s', 'invoicing' ) , $ipn_data['txn_id'] ) );
 
         $invoice->renew_subscription();
-    }
-}
-
-/**
- * Process the subscription started IPN.
- */
-function wpinv_process_paypal_subscr_signup( $ipn_data ) {
-    $parent_invoice_id = absint( $ipn_data['custom'] );
-    if( empty( $parent_invoice_id ) ) {
-        return;
-    }
-
-    $invoice = wpinv_get_invoice( $parent_invoice_id );
-    if ( empty( $invoice ) ) {
-        return;
-    }
-
-    //wpinv_set_payment_transaction_id( $invoice->ID, $ipn_data['txn_id'] );
-    wpinv_update_payment_status( $parent_invoice_id, 'publish' );
-    wpinv_insert_payment_note( $parent_invoice_id, sprintf( __( 'PayPal Subscription ID: %s', 'invoicing' ) , $ipn_data['subscr_id'] ) );
-    
-    $subscription = wpinv_get_paypal_subscription( $ipn_data );
-    if ( false === $subscription ) {
-        return;
-    }
-
-    $cart_details   = $invoice->cart_details;
-
-    if ( !empty( $cart_details ) ) {
-        foreach ( $cart_details as $cart_item ) {
-            $item = new WPInv_Item( $cart_item['id'] );
-            
-            $args = array(
-                'item_id'           => $cart_item['id'],
-                'status'            => 'active',
-                'period'            => $item->get_recurring_period(),
-                'initial_amount'    => $invoice->get_total(),
-                'recurring_amount'  => $invoice->get_recurring_details( 'total' ),
-                'interval'          => $item->get_recurring_interval(),
-                'bill_times'        => $item->get_recurring_limit(),
-                'expiration'        => $invoice->get_new_expiration( $cart_item['id'] ),
-                'profile_id'        => $ipn_data['subscr_id'],
-                'created'           => current_time( 'mysql', 0 )
-            );
-            
-            // Retrieve pending subscription from database and update it's status to active and set proper profile ID
-            $subscription->update_subscription( $args );
-        }
     }
 }
 
@@ -661,7 +692,7 @@ function wpinv_process_paypal_refund( $data, $invoice_id = 0 ) {
 		return;
 	}
 
-	if ( get_post_status( $invoice_id ) == 'refunded' ) {
+	if ( get_post_status( $invoice_id ) == 'wpi-refunded' ) {
 		return; // Only refund payments once
 	}
 
@@ -675,23 +706,23 @@ function wpinv_process_paypal_refund( $data, $invoice_id = 0 ) {
 
 	wpinv_insert_payment_note( $invoice_id, sprintf( __( 'PayPal Payment #%s Refunded for reason: %s', 'invoicing' ), $data['parent_txn_id'], $data['reason_code'] ) );
 	wpinv_insert_payment_note( $invoice_id, sprintf( __( 'PayPal Refund Transaction ID: %s', 'invoicing' ), $data['txn_id'] ) );
-	wpinv_update_payment_status( $invoice_id, 'refunded' );
+	wpinv_update_payment_status( $invoice_id, 'wpi-refunded' );
 }
 
 function wpinv_get_paypal_redirect( $ssl_check = false ) {
     if ( is_ssl() || ! $ssl_check ) {
-        $protocal = 'https://';
+        $protocol = 'https://';
     } else {
-        $protocal = 'http://';
+        $protocol = 'http://';
     }
 
     // Check the current payment mode
     if ( wpinv_is_test_mode( 'paypal' ) ) {
         // Test mode
-        $paypal_uri = $protocal . 'www.sandbox.paypal.com/cgi-bin/webscr';
+        $paypal_uri = $protocol . 'www.sandbox.paypal.com/cgi-bin/webscr';
     } else {
         // Live mode
-        $paypal_uri = $protocal . 'www.paypal.com/cgi-bin/webscr';
+        $paypal_uri = $protocol . 'www.paypal.com/cgi-bin/webscr';
     }
 
     return apply_filters( 'wpinv_paypal_uri', $paypal_uri );
@@ -714,7 +745,7 @@ function wpinv_paypal_success_page_content( $content ) {
 
     $wpi_invoice = wpinv_get_invoice( $invoice_id );
     
-    if ( !empty( $wpi_invoice ) && 'pending' == $wpi_invoice->status ) {
+    if ( !empty( $wpi_invoice ) && 'wpi-pending' == $wpi_invoice->status ) {
         // Payment is still pending so show processing indicator to fix the Race Condition, issue #
         ob_start();
         wpinv_get_template_part( 'wpinv-payment-processing' );
@@ -740,15 +771,19 @@ function wpinv_paypal_get_transaction_id( $invoice_id ) {
 }
 add_filter( 'wpinv_payment_get_transaction_id-paypal', 'wpinv_paypal_get_transaction_id', 10, 1 );
 
-function wpinv_paypal_link_transaction_id( $transaction_id, $invoice_id ) {
-    $sandbox = wpinv_is_test_mode( 'paypal' ) ? '.sandbox' : '';
-    
-    $paypal_base_url = 'https://www' . $sandbox . '.paypal.com/cgi-bin/webscr?cmd=_view-a-trans&id=';
-    $transaction_url = '<a href="' . esc_url( $paypal_base_url . $transaction_id ) . '" target="_blank">' . $transaction_id . '</a>';
+function wpinv_paypal_link_transaction_id( $transaction_id, $invoice_id, $invoice ) {
+    if ( $invoice->is_free_trial() || $transaction_id == $invoice_id ) { // Free trial does not have transaction at PayPal.
+        $transaction_url = $invoice->get_view_url();
+    } else {
+        $sandbox = wpinv_is_test_mode( 'paypal' ) ? '.sandbox' : '';
+        $transaction_url = 'https://www' . $sandbox . '.paypal.com/cgi-bin/webscr?cmd=_view-a-trans&id=' . $transaction_id;
+    }
 
-    return apply_filters( 'wpinv_paypal_link_payment_details_transaction_id', $transaction_url );
+    $transaction_link = '<a href="' . esc_url( $transaction_url ) . '" target="_blank">' . $transaction_id . '</a>';
+
+    return apply_filters( 'wpinv_paypal_link_payment_details_transaction_id', $transaction_link, $invoice );
 }
-add_filter( 'wpinv_payment_details_transaction_id-paypal', 'wpinv_paypal_link_transaction_id', 10, 2 );
+add_filter( 'wpinv_payment_details_transaction_id-paypal', 'wpinv_paypal_link_transaction_id', 10, 3 );
 
 function wpinv_gateway_paypal_button_label($label) {
     return __( 'Proceed to PayPal', 'invoicing' );

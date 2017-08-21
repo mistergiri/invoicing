@@ -2,12 +2,7 @@
 // Exit if accessed directly
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-function wpinv_user_invoices( $current_page = 1 ) {    
-    global $current_page;
-    wpinv_get_template_part( 'wpinv-invoice-history' );
-}
-
-function wpinv_get_users_invoices( $user = 0, $number = 20, $pagination = false, $status = 'complete' ) {
+function wpinv_get_users_invoices( $user = 0, $number = 20, $pagination = false, $status = 'publish' ) {
     if ( empty( $user ) ) {
         $user = get_current_user_id();
     }
@@ -15,8 +10,6 @@ function wpinv_get_users_invoices( $user = 0, $number = 20, $pagination = false,
     if ( 0 === $user ) {
         return false;
     }
-
-    $status = $status === 'complete' ? 'publish' : $status;
 
     if ( $pagination ) {
         if ( get_query_var( 'paged' ) )
@@ -31,7 +24,7 @@ function wpinv_get_users_invoices( $user = 0, $number = 20, $pagination = false,
         'post_type'      => 'wpi_invoice',
         'posts_per_page' => 20,
         'paged'          => null,
-        'post_status'    => array( 'complete', 'publish', 'pending' ),
+        'post_status'    => array( 'publish', 'wpi-pending' ),
         'user'           => $user,
         'order'          => 'date',
     );
@@ -147,4 +140,34 @@ function wpinv_dropdown_users( $args = '' ) {
         echo $html;
     }
     return $html;
+}
+
+function wpinv_guest_redirect( $redirect_to, $user_id = 0 ) {
+    if ( (int)wpinv_get_option( 'guest_checkout' ) && $user_id > 0 ) {
+        wpinv_login_user( $user_id );
+    } else {
+        $redirect_to = wp_login_url( $redirect_to );
+    }
+    
+    $redirect_to = apply_filters( 'wpinv_invoice_link_guest_redirect', $redirect_to, $user_id );
+    
+    wp_redirect( $redirect_to );
+}
+
+function wpinv_login_user( $user_id ) {
+    if ( is_user_logged_in() ) {
+        return true;
+    }
+    
+    $user = get_user_by( 'id', $user_id );
+    
+    if ( !empty( $user ) && !is_wp_error( $user ) && !empty( $user->user_login ) ) {
+        wp_set_current_user( $user_id, $user->user_login );
+        wp_set_auth_cookie( $user_id );
+        do_action( 'wp_login', $user->user_login );
+        
+        return true;
+    }
+    
+    return false;
 }

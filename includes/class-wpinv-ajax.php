@@ -209,13 +209,14 @@ class WPInv_Ajax {
         $quantity = wpinv_item_quantities_enabled() && !empty($_POST['qty']) && (int)$_POST['qty'] > 0 ? (int)$_POST['qty'] : 1;
 
         $args = array(
-            'id'         => $item_id,
-            'quantity'   => $quantity,
-            'item_price' => $item->get_price(),
-            'tax'        => 0.00,
-            'discount'   => 0,
-            'meta'       => array(),
-            'fees'       => array()
+            'id'            => $item_id,
+            'quantity'      => $quantity,
+            'item_price'    => $item->get_price(),
+            'custom_price'  => '',
+            'tax'           => 0.00,
+            'discount'      => 0,
+            'meta'          => array(),
+            'fees'          => array()
         );
 
         $invoice->add_item( $item_id, $args );
@@ -245,8 +246,8 @@ class WPInv_Ajax {
         $response['data']['subtotalf']  = $invoice->get_subtotal(true);
         $response['data']['tax']        = $invoice->get_tax();
         $response['data']['taxf']       = $invoice->get_tax(true);
-        $response['data']['discount']   = $invoice->discount;
-        $response['data']['discountf']  = wpinv_price( $invoice->discount, $invoice->get_currency() );
+        $response['data']['discount']   = $invoice->get_discount();
+        $response['data']['discountf']  = $invoice->get_discount(true);
         $response['data']['total']      = $invoice->get_total();
         $response['data']['totalf']     = $invoice->get_total(true);
         
@@ -330,8 +331,8 @@ class WPInv_Ajax {
         $response['data']['subtotalf']  = $invoice->get_subtotal(true);
         $response['data']['tax']        = $invoice->get_tax();
         $response['data']['taxf']       = $invoice->get_tax(true);
-        $response['data']['discount']   = $invoice->discount;
-        $response['data']['discountf']  = wpinv_price( $invoice->discount, $invoice->get_currency() );
+        $response['data']['discount']   = $invoice->get_discount();
+        $response['data']['discountf']  = $invoice->get_discount(true);
         $response['data']['total']      = $invoice->get_total();
         $response['data']['totalf']     = $invoice->get_total(true);
         
@@ -370,7 +371,7 @@ class WPInv_Ajax {
         
         $meta               = array();
         $meta['type']       = !empty($save_item['type']) ? sanitize_text_field($save_item['type']) : 'custom';
-        $meta['price']      = !empty($save_item['price']) ? wpinv_format_amount($save_item['price'], NULL, true ) : 0;
+        $meta['price']      = !empty($save_item['price']) ? wpinv_sanitize_amount( $save_item['price'] ) : 0;
         $meta['vat_rule']   = !empty($save_item['vat_rule']) ? sanitize_text_field($save_item['vat_rule']) : 'digital';
         $meta['vat_class']  = !empty($save_item['vat_class']) ? sanitize_text_field($save_item['vat_class']) : '_standard';
         

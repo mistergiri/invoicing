@@ -14,6 +14,7 @@ if ( !defined( 'WPINC' ) ) {
 final class WPInv_Invoice {
     public $ID  = 0;
     public $title;
+    public $post_type;
     
     public $pending;
     public $items = array();
@@ -35,8 +36,8 @@ final class WPInv_Invoice {
     public $date = '';
     public $due_date = '';
     public $completed_date = '';
-    public $status      = 'pending';
-    public $post_status = 'pending';
+    public $status      = 'wpi-pending';
+    public $post_status = 'wpi-pending';
     public $old_status = '';
     public $status_nicename = '';
     public $user_id = 0;
@@ -119,7 +120,7 @@ final class WPInv_Invoice {
             return false;
         }
 
-        if( 'wpi_invoice' !== $invoice->post_type ) {
+        if( !('wpi_invoice' == $invoice->post_type OR 'wpi_quote' == $invoice->post_type) ) {
             return false;
         }
 
@@ -127,6 +128,7 @@ final class WPInv_Invoice {
         
         // Primary Identifier
         $this->ID              = absint( $invoice_id );
+        $this->post_type       = $invoice->post_type;
         
         // We have a payment, get the generic payment_meta item to reduce calls to it
         $this->payment_meta    = $this->get_meta();
@@ -138,7 +140,7 @@ final class WPInv_Invoice {
         $this->mode            = $this->setup_mode();
         $this->parent_invoice  = $invoice->post_parent;
         $this->post_name       = $this->setup_post_name( $invoice );
-        $this->status_nicename = $this->setup_status_nicename();
+        $this->status_nicename = $this->setup_status_nicename($invoice->post_status);
 
         // Items
         $this->fees            = $this->setup_fees();
@@ -194,29 +196,29 @@ final class WPInv_Invoice {
         return true;
     }
     
-    private function setup_status_nicename() {
+    private function setup_status_nicename($status) {
         $all_invoice_statuses  = wpinv_get_invoice_statuses();
-        
-        $status = array_key_exists( $this->status, $all_invoice_statuses ) ? $all_invoice_statuses[$this->status] : ucfirst( $this->status );
+        $status   = isset( $all_invoice_statuses[$status] ) ? $all_invoice_statuses[$status] : __( $status, 'invoicing' );
 
-        return $status;
+        return apply_filters( 'setup_status_nicename', $status );
     }
     
     private function setup_post_name( $post = NULL ) {
+        global $wpdb;
+        
         $post_name = '';
         
         if ( !empty( $post ) ) {
             if( !empty( $post->post_name ) ) {
                 $post_name = $post->post_name;
-            } else if ( !empty( $post->ID ) && !empty( $post->post_title ) ) {
-                $post_name = sanitize_title( $post->post_title );
-                
-                global $wpdb;
-                $wpdb->update( $wpdb->posts, array( 'post_name' => $post_name ), array( 'ID' => $post->ID ) );
+            } else if ( !empty( $post->ID ) ) {
+                $post_name = 'inv-' . $post->ID;
+
+                $wpdb->update( $wpdb->posts, array( 'post_name' => 'inv-' . $post->ID ), array( 'ID' => $post->ID ) );
             }
         }
 
-        $this->post_name   = $post_name;
+        $this->post_name = $post_name;
     }
     
     private function setup_due_date() {
@@ -235,7 +237,7 @@ final class WPInv_Invoice {
     private function setup_completed_date() {
         $invoice = get_post( $this->ID );
 
-        if ( 'pending' == $invoice->post_status || 'preapproved' == $invoice->post_status ) {
+        if ( 'wpi-pending' == $invoice->post_status || 'preapproved' == $invoice->post_status ) {
             return false; // This invoice was never paid
         }
 
@@ -270,11 +272,11 @@ final class WPInv_Invoice {
     
     private function setup_discount() {
         //$discount = $this->get_meta( '_wpinv_discount', true );
-        $discount = $this->subtotal - ( $this->total - $this->tax - $this->fees_total );
+        $discount = (float)$this->subtotal - ( (float)$this->total - (float)$this->tax - (float)$this->fees_total );
         if ( $discount < 0 ) {
             $discount = 0;
         }
-        $discount = wpinv_format_amount( $discount, NULL, true );
+        $discount = wpinv_round_amount( $discount );
         
         return $discount;
     }
@@ -293,10 +295,6 @@ final class WPInv_Invoice {
         }
 
         return $tax;
-        /*
-        $tax = $this->get_meta( '_wpinv_tax', true );
-        return $tax;
-        */
     }
 
     private function setup_subtotal() {
@@ -345,7 +343,7 @@ final class WPInv_Invoice {
     private function setup_gateway() {
         $gateway = $this->get_meta( '_wpinv_gateway' );
         
-        if ( empty( $gateway ) && 'publish' === $this->status || 'complete' === $this->status ) {
+        if ( empty( $gateway ) && 'publish' === $this->status ) {
             $gateway = 'manual';
         }
         
@@ -523,21 +521,27 @@ final class WPInv_Invoice {
         $number = $this->get_meta( '_wpinv_number', true );
 
         if ( !$number ) {
-            $number = wp_sprintf( __( 'WPINV-%d', 'invoicing' ), $this->ID );
+            $number = $this->ID;
+
+            if ( $this->status == 'auto-draft' ) {
+                if ( wpinv_get_option( 'sequential_invoice_number' ) ) {
+                    $next_number = wpinv_get_next_invoice_number();
+                    $number      = $next_number;
+                }
+            }
+            
+            $number = wpinv_format_invoice_number( $number );
         }
 
         return $number;
     }
     
     private function insert_invoice() {
-        $invoice_title = '';
+        global $wpdb;
 
-        if ($number = $this->get_number()) {
-            $invoice_title = $number;
-        } else if ( ! empty( $this->ID ) ) {
-            $invoice_title = wp_sprintf( __( 'WPINV-%d', 'invoicing' ), $this->ID );
-        } else {
-            $invoice_title = __( 'WPINV-', 'invoicing' );
+        $invoice_number = $this->ID;
+        if ( $number = $this->get_meta( '_wpinv_number', true ) ) {
+            $invoice_number = $number;
         }
 
         if ( empty( $this->key ) ) {
@@ -576,14 +580,12 @@ final class WPInv_Invoice {
             'status'       => $this->status,
             'fees'         => $this->fees,
         );
-        
-        $post_name      = sanitize_title( $invoice_title );
 
         $post_data = array(
-                        'post_title'    => $invoice_title,
+                        'post_title'    => $invoice_number,
                         'post_status'   => $this->status,
                         'post_author'   => $this->user_id,
-                        'post_type'     => 'wpi_invoice',
+                        'post_type'     => $this->post_type,
                         'post_date'     => ! empty( $this->date ) && $this->date != '0000-00-00 00:00:00' ? $this->date : current_time( 'mysql' ),
                         'post_date_gmt' => ! empty( $this->date ) && $this->date != '0000-00-00 00:00:00' ? get_gmt_from_date( $this->date ) : current_time( 'mysql', 1 ),
                         'post_parent'   => $this->parent_invoice,
@@ -593,27 +595,20 @@ final class WPInv_Invoice {
         // Create a blank invoice
         if ( !empty( $this->ID ) ) {
             $args['ID']         = $this->ID;
-            $args['post_name']  = $post_name;
-            
-            $invoice_id = wp_update_post( $args );
+
+            $invoice_id = wp_update_post( $args, true );
         } else {
-            $invoice_id = wp_insert_post( $args );
-            
-            $post_title = wp_sprintf( __( 'WPINV-%d', 'invoicing' ), $invoice_id );
-            global $wpdb;
-            $wpdb->update( $wpdb->posts, array( 'post_title' => $post_title, 'post_name' => sanitize_title( $post_title ) ), array( 'ID' => $invoice_id ) );
-            clean_post_cache( $invoice_id );
+            $invoice_id = wp_insert_post( $args, true );
         }
 
-        if ( !empty( $invoice_id ) ) {             
+        if ( is_wp_error( $invoice_id ) ) {
+            return false;
+        }
+
+        if ( !empty( $invoice_id ) ) {
             $this->ID  = $invoice_id;
             $this->_ID = $invoice_id;
-            
-            ///$this->pending['user_id'] = $this->user_id;
-            if ( isset( $this->pending['number'] ) ) {
-                $this->pending['number'] = $post_name;
-            }
-            
+
             $this->payment_meta = apply_filters( 'wpinv_payment_meta', $this->payment_meta, $payment_data );
             if ( ! empty( $this->payment_meta['fees'] ) ) {
                 $this->fees = array_merge( $this->fees, $this->payment_meta['fees'] );
@@ -650,7 +645,7 @@ final class WPInv_Invoice {
             } else {
                 $this->ID = $invoice_id;
             }
-        }        
+        }
 
         // If we have something pending, let's save it
         if ( !empty( $this->pending ) ) {
@@ -667,13 +662,13 @@ final class WPInv_Invoice {
                                     $price = $item['price'];
                                     $taxes = $item['tax'];
 
-                                    if ( 'publish' === $this->status || 'complete' === $this->status || 'revoked' === $this->status ) {
+                                    if ( 'publish' === $this->status ) {
                                         $total_increase += $price;
                                     }
                                     break;
 
                                 case 'remove':
-                                    if ( 'publish' === $this->status || 'complete' === $this->status || 'revoked' === $this->status ) {
+                                    if ( 'publish' === $this->status ) {
                                         $total_decrease += $item['price'];
                                     }
                                     break;
@@ -681,7 +676,7 @@ final class WPInv_Invoice {
                         }
                         break;
                     case 'fees':
-                        if ( 'publish' !== $this->status && 'complete' !== $this->status && 'revoked' !== $this->status ) {
+                        if ( 'publish' !== $this->status ) {
                             break;
                         }
 
@@ -780,9 +775,6 @@ final class WPInv_Invoice {
                     case 'key':
                         $this->update_meta( '_wpinv_key', $this->key );
                         break;
-                    case 'number':
-                        $this->update_meta( '_wpinv_number', $this->number );
-                        break;
                     case 'date':
                         $args = array(
                             'ID'        => $this->ID,
@@ -809,19 +801,12 @@ final class WPInv_Invoice {
 
                         $this->user_info['discount'] = implode( ',', $this->discounts );
                         break;
-                        
-                    //case 'tax':
-                        //$this->update_meta( '_wpinv_tax', wpinv_format_amount( $this->tax, NULL, true ) );
-                        //break;
                     case 'discount':
-                        $this->update_meta( '_wpinv_discount', wpinv_format_amount( $this->discount, NULL, true ) );
+                        $this->update_meta( '_wpinv_discount', wpinv_round_amount( $this->discount ) );
                         break;
                     case 'discount_code':
                         $this->update_meta( '_wpinv_discount_code', $this->discount_code );
                         break;
-                    //case 'fees':
-                        //$this->update_meta( '_wpinv_fees', $this->fees );
-                        //break;
                     case 'parent_invoice':
                         $args = array(
                             'ID'          => $this->ID,
@@ -833,11 +818,11 @@ final class WPInv_Invoice {
                         do_action( 'wpinv_save', $this, $key );
                         break;
                 }
-            }       
+            }
 
-            $this->update_meta( '_wpinv_subtotal', wpinv_format_amount( $this->subtotal, NULL, true ) );
-            $this->update_meta( '_wpinv_total', wpinv_format_amount( $this->total, NULL, true ) );
-            $this->update_meta( '_wpinv_tax', wpinv_format_amount( $this->tax, NULL, true ) );
+            $this->update_meta( '_wpinv_subtotal', wpinv_round_amount( $this->subtotal ) );
+            $this->update_meta( '_wpinv_total', wpinv_round_amount( $this->total ) );
+            $this->update_meta( '_wpinv_tax', wpinv_round_amount( $this->tax ) );
             
             $this->items    = array_values( $this->items );
             
@@ -863,10 +848,12 @@ final class WPInv_Invoice {
             $this->pending = array();
             $saved         = true;
         } else {
-            $this->update_meta( '_wpinv_subtotal', wpinv_format_amount( $this->subtotal, NULL, true ) );
-            $this->update_meta( '_wpinv_total', wpinv_format_amount( $this->total, NULL, true ) );
-            $this->update_meta( '_wpinv_tax', wpinv_format_amount( $this->tax, NULL, true ) );
+            $this->update_meta( '_wpinv_subtotal', wpinv_round_amount( $this->subtotal ) );
+            $this->update_meta( '_wpinv_total', wpinv_round_amount( $this->total ) );
+            $this->update_meta( '_wpinv_tax', wpinv_round_amount( $this->tax ) );
         }
+        
+        do_action( 'wpinv_invoice_save', $this, $saved );
 
         if ( true === $saved || $setup ) {
             $this->setup_invoice( $this->ID );
@@ -1015,7 +1002,7 @@ final class WPInv_Invoice {
     private function increase_subtotal( $amount = 0.00 ) {
         $amount          = (float) $amount;
         $this->subtotal += $amount;
-        $this->subtotal  = wpinv_format_amount( $this->subtotal, NULL, true );
+        $this->subtotal  = wpinv_round_amount( $this->subtotal );
 
         $this->recalculate_total();
     }
@@ -1023,7 +1010,7 @@ final class WPInv_Invoice {
     private function decrease_subtotal( $amount = 0.00 ) {
         $amount          = (float) $amount;
         $this->subtotal -= $amount;
-        $this->subtotal  = wpinv_format_amount( $this->subtotal, NULL, true );
+        $this->subtotal  = wpinv_round_amount( $this->subtotal );
 
         if ( $this->subtotal < 0 ) {
             $this->subtotal = 0;
@@ -1035,7 +1022,7 @@ final class WPInv_Invoice {
     private function increase_fees( $amount = 0.00 ) {
         $amount            = (float)$amount;
         $this->fees_total += $amount;
-        $this->fees_total  = wpinv_format_amount( $this->fees_total, NULL, true );
+        $this->fees_total  = wpinv_round_amount( $this->fees_total );
 
         $this->recalculate_total();
     }
@@ -1043,7 +1030,7 @@ final class WPInv_Invoice {
     private function decrease_fees( $amount = 0.00 ) {
         $amount            = (float) $amount;
         $this->fees_total -= $amount;
-        $this->fees_total  = wpinv_format_amount( $this->fees_total, NULL, true );
+        $this->fees_total  = wpinv_round_amount( $this->fees_total );
 
         if ( $this->fees_total < 0 ) {
             $this->fees_total = 0;
@@ -1056,7 +1043,7 @@ final class WPInv_Invoice {
         global $wpi_nosave;
         
         $this->total = $this->subtotal + $this->tax + $this->fees_total;
-        $this->total = wpinv_format_amount( $this->total, NULL, true );
+        $this->total = wpinv_round_amount( $this->total );
         
         do_action( 'wpinv_invoice_recalculate_total', $this, $wpi_nosave );
     }
@@ -1104,13 +1091,13 @@ final class WPInv_Invoice {
            
             // Process any specific status functions
             switch( $new_status ) {
-                case 'refunded':
+                case 'wpi-refunded':
                     $this->process_refund();
                     break;
-                case 'failed':
+                case 'wpi-failed':
                     $this->process_failure();
                     break;
-                case 'pending':
+                case 'wpi-pending':
                     $this->process_pending();
                     break;
             }
@@ -1126,7 +1113,7 @@ final class WPInv_Invoice {
 
     public function refund() {
         $this->old_status        = $this->status;
-        $this->status            = 'refunded';
+        $this->status            = 'wpi-refunded';
         $this->pending['status'] = $this->status;
 
         $this->save();
@@ -1165,8 +1152,8 @@ final class WPInv_Invoice {
     private function process_refund() {
         $process_refund = true;
 
-        // If the payment was not in publish or revoked status, don't decrement stats as they were never incremented
-        if ( ( 'publish' != $this->old_status && 'revoked' != $this->old_status ) || 'refunded' != $this->status ) {
+        // If the payment was not in publish, don't decrement stats as they were never incremented
+        if ( 'publish' != $this->old_status || 'wpi-refunded' != $this->status ) {
             $process_refund = false;
         }
 
@@ -1205,7 +1192,7 @@ final class WPInv_Invoice {
         $process_pending = true;
 
         // If the payment was not in publish or revoked status, don't decrement stats as they were never incremented
-        if ( ( 'publish' != $this->old_status && 'revoked' != $this->old_status ) || 'pending' != $this->status ) {
+        if ( ( 'publish' != $this->old_status && 'revoked' != $this->old_status ) || 'wpi-pending' != $this->status ) {
             $process_pending = false;
         }
 
@@ -1220,7 +1207,7 @@ final class WPInv_Invoice {
         $decrease_customer_value = apply_filters( 'wpinv_decrease_customer_value_on_pending', true, $this );
         $decrease_purchase_count = apply_filters( 'wpinv_decrease_customer_purchase_count_on_pending', true, $this );
 
-        $this->completed_date = false;
+        $this->completed_date = '';
         $this->update_meta( '_wpinv_completed_date', '' );
     }
     
@@ -1229,6 +1216,9 @@ final class WPInv_Invoice {
         $meta = get_post_meta( $this->ID, $meta_key, $single );
 
         if ( $meta_key === '_wpinv_payment_meta' ) {
+
+            if(!is_array($meta)){$meta = array();} // we need this to be an array so make sure it is.
+
             if ( empty( $meta['key'] ) ) {
                 $meta['key'] = $this->setup_invoice_key();
             }
@@ -1265,19 +1255,23 @@ final class WPInv_Invoice {
     }
     
     public function get_subtotal( $currency = false ) {
-        $subtotal = wpinv_format_amount( $this->subtotal, NULL, !$currency );
+        $subtotal = wpinv_round_amount( $this->subtotal );
         
         if ( $currency ) {
-            $subtotal = wpinv_price( $subtotal, $this->get_currency() );
+            $subtotal = wpinv_price( wpinv_format_amount( $subtotal, NULL, !$currency ), $this->get_currency() );
         }
         
         return apply_filters( 'wpinv_get_invoice_subtotal', $subtotal, $this->ID, $this, $currency );
     }
     
     public function get_total( $currency = false ) {        
-        $total = wpinv_format_amount( $this->total, NULL, !$currency );
+        if ( $this->is_free_trial() ) {
+            $total = wpinv_round_amount( 0 );
+        } else {
+            $total = wpinv_round_amount( $this->total );
+        }
         if ( $currency ) {
-            $total = wpinv_price( $total, $this->get_currency() );
+            $total = wpinv_price( wpinv_format_amount( $total, NULL, !$currency ), $this->get_currency() );
         }
         
         return apply_filters( 'wpinv_get_invoice_total', $total, $this->ID, $this, $currency );
@@ -1290,55 +1284,68 @@ final class WPInv_Invoice {
         $data['discount']     = $this->get_discount();
         $data['tax']          = $this->get_tax();
         $data['total']        = $this->get_total();
-        
-        if ( !empty( $this->cart_details ) && ( $this->is_parent() || $this->is_renewal() ) && $discounts = $this->get_discounts( true ) ) {
-            $has_recurring = false;
-            foreach ( $discounts as $key => $code ) {
-                if ( wpinv_discount_is_recurring( $code, true ) ) {
-                    $has_recurring = true;
-                    break;
-                }
-            }
+    
+        if ( !empty( $this->cart_details ) && ( $this->is_parent() || $this->is_renewal() ) ) {
+            $is_free_trial = $this->is_free_trial();
+            $discounts = $this->get_discounts( true );
             
-            if ( $has_recurring ) {
-                $cart_subtotal   = 0;
-                $cart_discount   = 0;
-                $cart_tax        = 0;
-
-                foreach ( $this->cart_details as $key => $item ) {
-                    $item_quantity  = $item['quantity'] > 0 ? absint( $item['quantity'] ) : 1;
-                    $item_subtotal  = !empty( $item['subtotal'] ) ? $item['subtotal'] : $item['item_price'] * $item_quantity;
-                    $item_discount  = 0;
-                    $item_tax       = $item_subtotal > 0 && !empty( $item['vat_rate'] ) ? ( $item_subtotal * 0.01 * (float)$item['vat_rate'] ) : 0;
-                    
-                    if ( wpinv_prices_include_tax() ) {
-                        $item_subtotal -= wpinv_format_amount( $item_tax, NULL, true );
-                    }
-                    
-                    $item_total     = $item_subtotal - $item_discount + $item_tax;
-                    // Do not allow totals to go negative
-                    if ( $item_total < 0 ) {
-                        $item_total = 0;
-                    }
-                    
-                    $cart_subtotal  += (float)($item_subtotal);
-                    $cart_discount  += (float)($item_discount);
-                    $cart_tax       += (float)($item_tax);
-                    
-                    $data['cart_details'][$key]['discount']   = wpinv_format_amount( $item_discount, NULL, true );
-                    $data['cart_details'][$key]['tax']        = wpinv_format_amount( $item_tax, NULL, true );
-                    $data['cart_details'][$key]['price']      = wpinv_format_amount( $item_total, NULL, true );
-                }
+            if ( $is_free_trial || !empty( $discounts ) ) {
+                $first_use_only = false;
                 
-                $data['subtotal'] = wpinv_format_amount( $cart_subtotal, NULL, true );
-                $data['discount'] = wpinv_format_amount( $cart_discount, NULL, true );
-                $data['tax']      = wpinv_format_amount( $cart_tax, NULL, true );
-                $data['total']    = wpinv_format_amount( ( $data['subtotal'] + $data['tax'] ), NULL, true );
+                if ( !empty( $discounts ) ) {
+                    foreach ( $discounts as $key => $code ) {
+                        if ( wpinv_discount_is_recurring( $code, true ) ) {
+                            $first_use_only = true;
+                            break;
+                        }
+                    }
+                }
+                    
+                if ( !$first_use_only ) {
+                    $data['subtotal'] = wpinv_round_amount( $this->subtotal );
+                    $data['discount'] = wpinv_round_amount( $this->discount );
+                    $data['tax']      = wpinv_round_amount( $this->tax );
+                    $data['total']    = wpinv_round_amount( $this->total );
+                } else {
+                    $cart_subtotal   = 0;
+                    $cart_discount   = 0;
+                    $cart_tax        = 0;
+
+                    foreach ( $this->cart_details as $key => $item ) {
+                        $item_quantity  = $item['quantity'] > 0 ? absint( $item['quantity'] ) : 1;
+                        $item_subtotal  = !empty( $item['subtotal'] ) ? $item['subtotal'] : $item['item_price'] * $item_quantity;
+                        $item_discount  = 0;
+                        $item_tax       = $item_subtotal > 0 && !empty( $item['vat_rate'] ) ? ( $item_subtotal * 0.01 * (float)$item['vat_rate'] ) : 0;
+                        
+                        if ( wpinv_prices_include_tax() ) {
+                            $item_subtotal -= wpinv_round_amount( $item_tax );
+                        }
+                        
+                        $item_total     = $item_subtotal - $item_discount + $item_tax;
+                        // Do not allow totals to go negative
+                        if ( $item_total < 0 ) {
+                            $item_total = 0;
+                        }
+                        
+                        $cart_subtotal  += (float)($item_subtotal);
+                        $cart_discount  += (float)($item_discount);
+                        $cart_tax       += (float)($item_tax);
+                        
+                        $data['cart_details'][$key]['discount']   = wpinv_round_amount( $item_discount );
+                        $data['cart_details'][$key]['tax']        = wpinv_round_amount( $item_tax );
+                        $data['cart_details'][$key]['price']      = wpinv_round_amount( $item_total );
+                    }
+                    
+                    $data['subtotal'] = wpinv_round_amount( $cart_subtotal );
+                    $data['discount'] = wpinv_round_amount( $cart_discount );
+                    $data['tax']      = wpinv_round_amount( $cart_tax );
+                    $data['total']    = wpinv_round_amount( $data['subtotal'] + $data['tax'] );
+                }
             }
         }
         
         $data = apply_filters( 'wpinv_get_invoice_recurring_details', $data, $this, $field, $currency );
-        
+
         if ( isset( $data[$field] ) ) {
             return ( $currency ? wpinv_price( $data[$field], $this->get_currency() ) : $data[$field] );
         }
@@ -1347,9 +1354,9 @@ final class WPInv_Invoice {
     }
     
     public function get_final_tax( $currency = false ) {        
-        $final_total = wpinv_format_amount( $this->tax, NULL, !$currency );
+        $final_total = wpinv_round_amount( $this->tax );
         if ( $currency ) {
-            $final_total = wpinv_price( $final_total, $this->get_currency() );
+            $final_total = wpinv_price( wpinv_format_amount( $final_total, NULL, !$currency ), $this->get_currency() );
         }
         
         return apply_filters( 'wpinv_get_invoice_final_total', $final_total, $this, $currency );
@@ -1367,14 +1374,20 @@ final class WPInv_Invoice {
         if ( !empty( $this->discounts ) ) {
             global $ajax_cart_details;
             $ajax_cart_details = $this->get_cart_details();
+            
+            if ( !empty( $ajax_cart_details ) && count( $ajax_cart_details ) == count( $this->items ) ) {
+                $cart_items = $ajax_cart_details;
+            } else {
+                $cart_items = $this->items;
+            }
 
-            $this->discount = wpinv_get_cart_items_discount_amount( $this->items , $this->discounts );
+            $this->discount = wpinv_get_cart_items_discount_amount( $cart_items , $this->discounts );
         }
-        $discount   = wpinv_format_amount( $this->discount, NULL, !$currency );
+        $discount   = wpinv_round_amount( $this->discount );
         $dash       = $dash && $discount > 0 ? '&ndash;' : '';
         
         if ( $currency ) {
-            $discount = wpinv_price( $discount, $this->get_currency() );
+            $discount = wpinv_price( wpinv_format_amount( $discount, NULL, !$currency ), $this->get_currency() );
         }
         
         $discount   = $dash . $discount;
@@ -1387,10 +1400,10 @@ final class WPInv_Invoice {
     }
     
     public function get_tax( $currency = false ) {
-        $tax = wpinv_format_amount( $this->tax, NULL, !$currency );
+        $tax = wpinv_round_amount( $this->tax );
         
         if ( $currency ) {
-            $tax = wpinv_price( $tax, $this->get_currency() );
+            $tax = wpinv_price( wpinv_format_amount( $tax, NULL, !$currency ), $this->get_currency() );
         }
         
         return apply_filters( 'wpinv_get_invoice_tax', $tax, $this->ID, $this, $currency );
@@ -1561,14 +1574,15 @@ final class WPInv_Invoice {
 
         // Set some defaults
         $defaults = array(
-            'quantity'  => 1,
-            'id'        => false,
-            'name'      => $item->get_name(),
-            'item_price'=> false,
-            'discount'  => 0,
-            'tax'       => 0.00,
-            'meta'      => array(),
-            'fees'      => array()
+            'quantity'      => 1,
+            'id'            => false,
+            'name'          => $item->get_name(),
+            'item_price'    => false,
+            'custom_price'  => '',
+            'discount'      => 0,
+            'tax'           => 0.00,
+            'meta'          => array(),
+            'fees'          => array()
         );
 
         $args = wp_parse_args( apply_filters( 'wpinv_add_item_args', $args, $item->ID ), $defaults );
@@ -1580,6 +1594,8 @@ final class WPInv_Invoice {
         
         $_POST['wpinv_country'] = $this->country;
         $_POST['wpinv_state']   = $this->state;
+        
+        $found_cart_key         = false;
         
         if ($has_quantities) {
             $this->cart_details = !empty( $this->cart_details ) ? array_values( $this->cart_details ) : $this->cart_details;
@@ -1593,7 +1609,6 @@ final class WPInv_Invoice {
                 break;
             }
             
-            $found_cart_key = false;
             foreach ( $this->cart_details as $cart_key => $cart_item ) {
                 if ( $item_id != $cart_item['id'] ) {
                     continue;
@@ -1620,10 +1635,10 @@ final class WPInv_Invoice {
             $discount_increased = $discount > 0 && $subtotal > 0 && $discount > (float)$cart_item['discount'] ? $discount - (float)$cart_item['discount'] : 0;
             $tax_increased      = $tax > 0 && $subtotal > 0 && $tax > (float)$cart_item['tax'] ? $tax - (float)$cart_item['tax'] : 0;
             // The total increase equals the number removed * the item_price
-            $total_increased    = wpinv_format_amount( $item_price, NULL, true );
+            $total_increased    = wpinv_round_amount( $item_price );
             
             if ( wpinv_prices_include_tax() ) {
-                $subtotal -= wpinv_format_amount( $tax, NULL, true );
+                $subtotal -= wpinv_round_amount( $tax );
             }
 
             $total              = $subtotal - $discount + $tax;
@@ -1644,16 +1659,21 @@ final class WPInv_Invoice {
             
             $this->cart_details[$found_cart_key] = $cart_item;
         } else {
-            // Allow overriding the price
-            if( false !== $args['item_price'] ) {
-                $item_price = $args['item_price'];
+            // Set custom price.
+            if ( $args['custom_price'] !== '' ) {
+                $item_price = $args['custom_price'];
             } else {
-                $item_price = wpinv_get_item_price( $item->ID );
+                // Allow overriding the price
+                if ( false !== $args['item_price'] ) {
+                    $item_price = $args['item_price'];
+                } else {
+                    $item_price = wpinv_get_item_price( $item->ID );
+                }
             }
 
             // Sanitizing the price here so we don't have a dozen calls later
             $item_price = wpinv_sanitize_amount( $item_price );
-            $subtotal   = wpinv_format_amount( $item_price * $args['quantity'], NULL, true );
+            $subtotal   = wpinv_round_amount( $item_price * $args['quantity'] );
         
             $discount   = !empty( $args['discount'] ) ? $args['discount'] : 0;
             $tax_class  = !empty( $args['vat_class'] ) ? $args['vat_class'] : '';
@@ -1669,7 +1689,7 @@ final class WPInv_Invoice {
             $this->items[]  = $new_item;
 
             if ( wpinv_prices_include_tax() ) {
-                $subtotal -= wpinv_format_amount( $tax, NULL, true );
+                $subtotal -= wpinv_round_amount( $tax );
             }
 
             $total      = $subtotal - $discount + $tax;
@@ -1680,18 +1700,19 @@ final class WPInv_Invoice {
             }
         
             $this->cart_details[] = array(
-                'name'        => !empty($args['name']) ? $args['name'] : $item->get_name(),
-                'id'          => $item->ID,
-                'item_price'  => wpinv_format_amount( $item_price, NULL, true ),
-                'quantity'    => $args['quantity'],
-                'discount'    => $discount,
-                'subtotal'    => wpinv_format_amount( $subtotal, NULL, true ),
-                'tax'         => wpinv_format_amount( $tax, NULL, true ),
-                'price'       => wpinv_format_amount( $total, NULL, true ),
-                'vat_rate'    => $tax_rate,
-                'vat_class'   => $tax_class,
-                'meta'        => $args['meta'],
-                'fees'        => $args['fees'],
+                'name'          => !empty($args['name']) ? $args['name'] : $item->get_name(),
+                'id'            => $item->ID,
+                'item_price'    => wpinv_round_amount( $item_price ),
+                'custom_price'  => ( $args['custom_price'] !== '' ? wpinv_round_amount( $args['custom_price'] ) : '' ),
+                'quantity'      => $args['quantity'],
+                'discount'      => $discount,
+                'subtotal'      => wpinv_round_amount( $subtotal ),
+                'tax'           => wpinv_round_amount( $tax ),
+                'price'         => wpinv_round_amount( $total ),
+                'vat_rate'      => $tax_rate,
+                'vat_class'     => $tax_class,
+                'meta'          => $args['meta'],
+                'fees'          => $args['fees'],
             );
                         
             $subtotal = $subtotal - $discount;
@@ -1711,9 +1732,10 @@ final class WPInv_Invoice {
     public function remove_item( $item_id, $args = array() ) {
         // Set some defaults
         $defaults = array(
-            'quantity'   => 1,
-            'item_price' => false,
-            'cart_index' => false,
+            'quantity'      => 1,
+            'item_price'    => false,
+            'custom_price'  => '',
+            'cart_index'    => false,
         );
         $args = wp_parse_args( $args, $defaults );
 
@@ -1801,16 +1823,16 @@ final class WPInv_Invoice {
             $discount           = !empty( $cart_item['discount'] ) ? $cart_item['discount'] : 0;
             $tax                = $subtotal > 0 && $tax_rate > 0 ? ( ( $subtotal - $discount ) * 0.01 * (float)$tax_rate ) : 0;
             
-            $discount_decrease  = (float)$cart_item['discount'] > 0 && $quantity > 0 ? wpinv_format_amount( ( (float)$cart_item['discount'] / $quantity ), NULL, true ) : 0;
+            $discount_decrease  = (float)$cart_item['discount'] > 0 && $quantity > 0 ? wpinv_round_amount( ( (float)$cart_item['discount'] / $quantity ) ) : 0;
             $discount_decrease  = $discount > 0 && $subtotal > 0 && (float)$cart_item['discount'] > $discount ? (float)$cart_item['discount'] - $discount : $discount_decrease; 
-            $tax_decrease       = (float)$cart_item['tax'] > 0 && $quantity > 0 ? wpinv_format_amount( ( (float)$cart_item['tax'] / $quantity ), NULL, true ) : 0;
+            $tax_decrease       = (float)$cart_item['tax'] > 0 && $quantity > 0 ? wpinv_round_amount( ( (float)$cart_item['tax'] / $quantity ) ) : 0;
             $tax_decrease       = $tax > 0 && $subtotal > 0 && (float)$cart_item['tax'] > $tax ? (float)$cart_item['tax'] - $tax : $tax_decrease;
             
             // The total increase equals the number removed * the item_price
-            $total_decrease     = wpinv_format_amount( $item_price, NULL, true );
+            $total_decrease     = wpinv_round_amount( $item_price );
             
             if ( wpinv_prices_include_tax() ) {
-                $subtotal -= wpinv_format_amount( $tax, NULL, true );
+                $subtotal -= wpinv_round_amount( $tax );
             }
 
             $total              = $subtotal - $discount + $tax;
@@ -1869,7 +1891,7 @@ final class WPInv_Invoice {
             $cart_subtotal          = 0;
             $cart_discount          = 0;
             $cart_tax               = 0;
-            $update_cart_details    = array();
+            $cart_details           = array();
             
             $_POST['wpinv_country'] = $this->country;
             $_POST['wpinv_state']   = $this->state;
@@ -1877,7 +1899,7 @@ final class WPInv_Invoice {
             foreach ( $this->cart_details as $key => $item ) {
                 $item_price = $item['item_price'];
                 $quantity   = wpinv_item_quantities_enabled() && $item['quantity'] > 0 ? absint( $item['quantity'] ) : 1;
-                $amount     = wpinv_format_amount( $item_price * $quantity, NULL, true );
+                $amount     = wpinv_round_amount( $item_price * $quantity );
                 $subtotal   = $item_price * $quantity;
                 
                 $wpi_current_id         = $this->ID;
@@ -1890,7 +1912,7 @@ final class WPInv_Invoice {
                 $tax        = $item_price > 0 ? ( ( $subtotal - $discount ) * 0.01 * (float)$tax_rate ) : 0;
 
                 if ( wpinv_prices_include_tax() ) {
-                    $subtotal -= wpinv_format_amount( $tax, NULL, true );
+                    $subtotal -= wpinv_round_amount( $tax );
                 }
 
                 $total      = $subtotal - $discount + $tax;
@@ -1903,12 +1925,13 @@ final class WPInv_Invoice {
                 $cart_details[] = array(
                     'id'          => $item['id'],
                     'name'        => $item['name'],
-                    'item_price'  => wpinv_format_amount( $item_price, NULL, true ),
+                    'item_price'  => wpinv_round_amount( $item_price ),
+                    'custom_price'=> ( isset( $item['custom_price'] ) ? $item['custom_price'] : '' ),
                     'quantity'    => $quantity,
                     'discount'    => $discount,
-                    'subtotal'    => wpinv_format_amount( $subtotal, NULL, true ),
-                    'tax'         => wpinv_format_amount( $tax, NULL, true ),
-                    'price'       => wpinv_format_amount( $total, NULL, true ),
+                    'subtotal'    => wpinv_round_amount( $subtotal ),
+                    'tax'         => wpinv_round_amount( $tax ),
+                    'price'       => wpinv_round_amount( $total ),
                     'vat_rate'    => $tax_rate,
                     'vat_class'   => $tax_class,
                     'meta'        => isset($item['meta']) ? $item['meta'] : array(),
@@ -1919,9 +1942,9 @@ final class WPInv_Invoice {
                 $cart_discount  += (float)($discount);
                 $cart_tax       += (float)($tax);
             }
-            $this->subtotal = wpinv_format_amount( $cart_subtotal, NULL, true );
-            $this->tax      = wpinv_format_amount( $cart_tax, NULL, true );
-            $this->discount = wpinv_format_amount( $cart_discount, NULL, true );
+            $this->subtotal = wpinv_round_amount( $cart_subtotal );
+            $this->tax      = wpinv_round_amount( $cart_tax );
+            $this->discount = wpinv_round_amount( $cart_discount );
             
             $this->recalculate_total();
             
@@ -1939,9 +1962,9 @@ final class WPInv_Invoice {
     }
     
     public function needs_payment() {
-        $valid_invoice_statuses = apply_filters( 'wpinv_valid_invoice_statuses_for_payment', array( 'pending' ), $this );
+        $valid_invoice_statuses = apply_filters( 'wpinv_valid_invoice_statuses_for_payment', array( 'wpi-pending' ), $this );
 
-        if ( $this->has_status( $valid_invoice_statuses ) && $this->get_total() > 0 ) {
+        if ( $this->has_status( $valid_invoice_statuses ) && ( $this->get_total() > 0 || $this->is_free_trial() || $this->is_free() ) ) {
             $needs_payment = true;
         } else {
             $needs_payment = false;
@@ -1950,24 +1973,34 @@ final class WPInv_Invoice {
         return apply_filters( 'wpinv_needs_payment', $needs_payment, $this, $valid_invoice_statuses );
     }
     
-    public function get_checkout_payment_url( $on_checkout = false ) {
+    public function get_checkout_payment_url( $on_checkout = false, $secret = false ) {
         $pay_url = wpinv_get_checkout_uri();
 
         if ( is_ssl() ) {
             $pay_url = str_replace( 'http:', 'https:', $pay_url );
         }
+        
+        $key = $this->get_key();
 
         if ( $on_checkout ) {
-            $pay_url = add_query_arg( 'invoice_key', $this->get_key(), $pay_url );
+            $pay_url = add_query_arg( 'invoice_key', $key, $pay_url );
         } else {
-            $pay_url = add_query_arg( array( 'wpi_action' => 'pay_for_invoice', 'invoice_key' => $this->get_key() ), $pay_url );
+            $pay_url = add_query_arg( array( 'wpi_action' => 'pay_for_invoice', 'invoice_key' => $key ), $pay_url );
+        }
+        
+        if ( $secret ) {
+            $pay_url = add_query_arg( array( '_wpipay' => md5( $this->get_user_id() . '::' . $this->get_email() . '::' . $key ) ), $pay_url );
         }
 
         return apply_filters( 'wpinv_get_checkout_payment_url', $pay_url, $this );
     }
     
-    public function get_view_url() {
+    public function get_view_url( $secret = false ) {
         $print_url = get_permalink( $this->ID );
+        
+        if ( $secret ) {
+            $print_url = add_query_arg( array( '_wpipay' => md5( $this->get_user_id() . '::' . $this->get_email() . '::' . $this->get_key() ) ), $print_url );
+        }
 
         return apply_filters( 'wpinv_get_view_url', $print_url, $this );
     }
@@ -1995,6 +2028,18 @@ final class WPInv_Invoice {
         }
 
         return apply_filters( 'wpinv_invoice_has_recurring_item', $has_subscription, $this->cart_details );
+    }
+    
+    public function is_free_trial() {
+        $is_free_trial = false;
+        
+        if ( $this->is_parent() && $item = $this->get_recurring( true ) ) {
+            if ( !empty( $item ) && $item->has_free_trial() ) {
+                $is_free_trial = true;
+            }
+        }
+
+        return apply_filters( 'wpinv_invoice_is_free_trial', $is_free_trial, $this->cart_details );
     }
     
     public function get_recurring( $object = false ) {
@@ -2039,6 +2084,37 @@ final class WPInv_Invoice {
         return $expiration;
     }
     
+    public function get_cancelled_date( $formatted = true ) {
+        $cancelled_date = $this->get_subscription_status() == 'cancelled' ? $this->get_meta( '_wpinv_subscr_cancelled_on', true ) : '';
+        
+        if ( $formatted && $cancelled_date ) {
+            $cancelled_date = date_i18n( get_option( 'date_format' ), strtotime( $cancelled_date ) );
+        }
+        
+        return $cancelled_date;
+    }
+    
+    public function get_trial_end_date( $formatted = true ) {
+        if ( !$this->is_free_trial() || !$this->is_paid() ) {
+            return NULL;
+        }
+        
+        $trial_end_date = $this->get_subscription_status() == 'trialing' ? $this->get_meta( '_wpinv_subscr_trial_end', true ) : '';
+        
+        if ( empty( $trial_end_date ) ) {
+            $trial_start_time = strtotime( $this->get_subscription_start() );
+            $trial_start_time += ( wpinv_period_in_days( $this->get_subscription_trial_interval(), $this->get_subscription_trial_period() ) * DAY_IN_SECONDS ) ;
+            
+            $trial_end_date = date_i18n( 'Y-m-d H:i:s', $trial_start_time );
+        }
+        
+        if ( $formatted && $trial_end_date ) {
+            $trial_end_date = date_i18n( get_option( 'date_format' ), strtotime( $trial_end_date ) );
+        }
+        
+        return $trial_end_date;
+    }
+    
     public function get_subscription_created( $default = true ) {
         $created = $this->get_meta( '_wpinv_subscr_created', true );
         
@@ -2078,10 +2154,16 @@ final class WPInv_Invoice {
         
         $total_period = $start . '+' . ( $interval * $bill_times ) . ' ' . $period;
         
+        $end_time = strtotime( $start . '+' . ( $interval * $bill_times ) . ' ' . $period );
+        
+        if ( $this->is_free_trial() ) {
+            $end_time += ( wpinv_period_in_days( $this->get_subscription_trial_interval(), $this->get_subscription_trial_period() ) * DAY_IN_SECONDS ) ;
+        }
+        
         if ( $formatted ) {
-            $date = date_i18n( get_option( 'date_format' ), strtotime( $total_period ) );
+            $date = date_i18n( get_option( 'date_format' ), $end_time );
         } else {
-            $date = date_i18n( 'Y-m-d H:i:s', strtotime( $total_period ) );
+            $date = date_i18n( 'Y-m-d H:i:s', $end_time );
         }
 
         return $date;
@@ -2092,7 +2174,7 @@ final class WPInv_Invoice {
     }
     
     public function get_original_invoice_id() {        
-        return $this->parent_invoice_id;
+        return $this->parent_invoice;
     }
     
     public function get_bill_times() {
@@ -2102,14 +2184,18 @@ final class WPInv_Invoice {
 
     public function get_child_payments( $self = false ) {
         $invoices = get_posts( array(
-            'post_type'         => 'wpi_invoice',
+            'post_type'         => $this->post_type,
             'post_parent'       => (int)$this->ID,
             'posts_per_page'    => '999',
-            'post_status'       => array( 'publish', 'complete', 'processing', 'renewal' ),
+            'post_status'       => array( 'publish', 'wpi-processing', 'wpi-renewal' ),
             'orderby'           => 'ID',
             'order'             => 'DESC',
             'fields'            => 'ids'
         ) );
+        
+        if ( $this->is_free_trial() ) {
+            $self = false;
+        }
         
         if ( $self && $this->is_paid() ) {
             if ( !empty( $invoices ) ) {
@@ -2148,12 +2234,42 @@ final class WPInv_Invoice {
     
     public function get_subscription_status() {
         $subscription_status = $this->get_meta( '_wpinv_subscr_status', true );
+
+        if ( empty( $subscription_status ) ) {
+            $status = 'pending';
+            
+            if ( $this->is_paid() ) {        
+                $bill_times   = (int)$this->get_bill_times();
+                $times_billed = (int)$this->get_total_payments();
+                $expiration = $this->get_subscription_end( false );
+                $expired = $bill_times != 0 && $expiration != '' && $expiration != '-' && strtotime( date_i18n( 'Y-m-d', strtotime( $expiration ) ) ) < strtotime( date_i18n( 'Y-m-d', current_time( 'timestamp' ) ) ) ? true : false;
+                
+                if ( (int)$bill_times == 0 ) {
+                    $status = $expired ? 'expired' : 'active';
+                } else if ( $bill_times > 0 && $times_billed >= $bill_times ) {
+                    $status = 'completed';
+                } else if ( $expired ) {
+                    $status = 'expired';
+                } else if ( $bill_times > 0 ) {
+                    $status = 'active';
+                } else {
+                    $status = 'pending';
+                }
+            }
+            
+            if ( $status && $status != $subscription_status ) {
+                $subscription_status = $status;
+                
+                $this->update_meta( '_wpinv_subscr_status', $status );
+            }
+        }
+        
         return $subscription_status;
     }
     
     public function get_subscription_status_label( $status = '' ) {
         $status = !empty( $status ) ? $status : $this->get_subscription_status();
-        
+
         switch( $status ) {
             case 'active' :
                 $status_label = __( 'Active', 'invoicing' );
@@ -2178,6 +2294,14 @@ final class WPInv_Invoice {
             case 'failing' :
                 $status_label = __( 'Failing', 'invoicing' );
                 break;
+                
+            case 'stopped' :
+                $status_label = __( 'Stopped', 'invoicing' );
+                break;
+                
+            case 'trialing' :
+                $status_label = __( 'Trialing', 'invoicing' );
+                break;
 
             default:
                 $status_label = $status;
@@ -2189,6 +2313,17 @@ final class WPInv_Invoice {
     
     public function get_subscription_period( $full = false ) {
         $period = $this->get_meta( '_wpinv_subscr_period', true );
+        
+        // Fix period for old invoices
+        if ( $period == 'day' ) {
+            $period = 'D';
+        } else if ( $period == 'week' ) {
+            $period = 'W';
+        } else if ( $period == 'month' ) {
+            $period = 'M';
+        } else if ( $period == 'year' ) {
+            $period = 'Y';
+        }
         
         if ( !in_array( $period, array( 'D', 'W', 'M', 'Y' ) ) ) {
             $period = 'D';
@@ -2224,6 +2359,62 @@ final class WPInv_Invoice {
         return $interval;
     }
     
+    public function get_subscription_trial_period( $full = false ) {
+        if ( !$this->is_free_trial() ) {
+            return '';
+        }
+        
+        $period = $this->get_meta( '_wpinv_subscr_trial_period', true );
+        
+        // Fix period for old invoices
+        if ( $period == 'day' ) {
+            $period = 'D';
+        } else if ( $period == 'week' ) {
+            $period = 'W';
+        } else if ( $period == 'month' ) {
+            $period = 'M';
+        } else if ( $period == 'year' ) {
+            $period = 'Y';
+        }
+        
+        if ( !in_array( $period, array( 'D', 'W', 'M', 'Y' ) ) ) {
+            $period = 'D';
+        }
+        
+        if ( $full ) {
+            switch( $period ) {
+                case 'D':
+                    $period = 'day';
+                break;
+                case 'W':
+                    $period = 'week';
+                break;
+                case 'M':
+                    $period = 'month';
+                break;
+                case 'Y':
+                    $period = 'year';
+                break;
+            }
+        }
+        
+        return $period;
+    }
+    
+    public function get_subscription_trial_interval() {
+        if ( !$this->is_free_trial() ) {
+            return 0;
+        }
+        
+        $interval = (int)$this->get_meta( '_wpinv_subscr_trial_interval', true );
+        
+        if ( !$interval > 0 ) {
+            $interval = 1;
+        }
+        
+        return $interval;
+    }
+    
     public function failing_subscription() {
         $args = array(
             'status' => 'failing'
@@ -2231,6 +2422,32 @@ final class WPInv_Invoice {
 
         if ( $this->update_subscription( $args ) ) {
             do_action( 'wpinv_subscription_failing', $this->ID, $this );
+            return true;
+        }
+
+        return false;
+    }
+    
+    public function stop_subscription() {
+        $args = array(
+            'status' => 'stopped'
+        );
+
+        if ( $this->update_subscription( $args ) ) {
+            do_action( 'wpinv_subscription_stopped', $this->ID, $this );
+            return true;
+        }
+
+        return false;
+    }
+    
+    public function restart_subscription() {
+        $args = array(
+            'status' => 'active'
+        );
+
+        if ( $this->update_subscription( $args ) ) {
+            do_action( 'wpinv_subscription_restarted', $this->ID, $this );
             return true;
         }
 
@@ -2249,8 +2466,13 @@ final class WPInv_Invoice {
             } else {
                 $user = __( 'gateway', 'invoicing' );
             }
+            
+            $subscription_id = $this->get_subscription_id();
+            if ( !$subscription_id ) {
+                $subscription_id = $this->ID;
+            }
 
-            $note = sprintf( __( 'Subscription #%d cancelled by %s', 'invoicing' ), $this->ID, $user );
+            $note = sprintf( __( 'Subscription %s has been cancelled by %s', 'invoicing' ), $subscription_id, $user );
             $this->add_note( $note );
 
             do_action( 'wpinv_subscription_cancelled', $this->ID, $this );
@@ -2274,6 +2496,8 @@ final class WPInv_Invoice {
             'initial_amount'    => '',
             'recurring_amount'  => '',
             'interval'          => 0,
+            'trial_interval'    => 0,
+            'trial_period'      => '',
             'bill_times'        => 0,
             'item_id'           => 0,
             'created'           => '',
@@ -2285,8 +2509,7 @@ final class WPInv_Invoice {
         $args = wp_parse_args( $data, $defaults );
 
         if ( $args['expiration'] && strtotime( 'NOW', current_time( 'timestamp' ) ) > strtotime( $args['expiration'], current_time( 'timestamp' ) ) ) {
-            if ( 'active' == $args['status'] ) {
-                // Force an active subscription to expired if expiration date is in the past
+            if ( 'active' == $args['status'] || $args['status'] == 'trialing' ) {
                 $args['status'] = 'expired';
             }
         }
@@ -2310,10 +2533,13 @@ final class WPInv_Invoice {
         }
 
         if ( !empty( $args['expiration'] ) && $args['expiration'] && strtotime( 'NOW', current_time( 'timestamp' ) ) > strtotime( $args['expiration'], current_time( 'timestamp' ) ) ) {
-            if ( !isset( $args['status'] ) || ( isset( $args['status'] ) && 'active' == $args['status'] ) ) {
-                // Force an active subscription to expired if expiration date is in the past
+            if ( !isset( $args['status'] ) || ( isset( $args['status'] ) && ( 'active' == $args['status'] || $args['status'] == 'trialing' ) ) ) {
                 $args['status'] = 'expired';
             }
+        }
+
+        if ( isset( $args['status'] ) && $args['status'] == 'cancelled' && empty( $args['cancelled_on'] ) ) {
+            $args['cancelled_on'] = date_i18n( 'Y-m-d H:i:s', current_time( 'timestamp' ) );
         }
 
         do_action( 'wpinv_subscription_pre_update', $args, $this );
@@ -2344,12 +2570,20 @@ final class WPInv_Invoice {
         
         $expiration     = date_i18n( 'Y-m-d 23:59:59', $expires );
         $expiration     = apply_filters( 'wpinv_subscription_renewal_expiration', $expiration, $this->ID, $this );
+        $bill_times     = $parent_invoice->get_bill_times();
+        $times_billed   = $parent_invoice->get_total_payments();
+        
+        if ( $parent_invoice->get_subscription_status() == 'trialing' && ( $times_billed > 0 || strtotime( date_i18n( 'Y-m-d' ) ) < strtotime( $parent_invoice->get_trial_end_date( false ) ) ) ) {
+            $args = array(
+                'status'     => 'active',
+            );
+
+            $parent_invoice->update_subscription( $args );
+        }
         
         do_action( 'wpinv_subscription_pre_renew', $this->ID, $expiration, $this );
 
         $status       = 'active';
-        $bill_times   = $parent_invoice->get_bill_times();
-        $times_billed = $parent_invoice->get_total_payments();
         if ( $bill_times > 0 && $times_billed >= $bill_times ) {
             $this->complete_subscription();
             $status = 'completed';
@@ -2426,8 +2660,10 @@ final class WPInv_Invoice {
     
     public function is_subscription_active() {
         $ret = false;
+        
+        $subscription_status = $this->get_subscription_status();
 
-        if( ! $this->is_subscription_expired() && ( $this->get_subscription_status() == 'active' || $this->get_subscription_status() == 'cancelled' ) ) {
+        if( ! $this->is_subscription_expired() && ( $subscription_status == 'active' || $subscription_status == 'cancelled' || $subscription_status == 'trialing' ) ) {
             $ret = true;
         }
 
@@ -2440,14 +2676,14 @@ final class WPInv_Invoice {
 
         if ( $subscription_status == 'expired' ) {
             $ret = true;
-        } else if ( 'active' === $subscription_status || 'cancelled' === $subscription_status ) {
+        } else if ( 'active' === $subscription_status || 'cancelled' === $subscription_status || 'trialing' == $subscription_status ) {
             $ret        = false;
             $expiration = $this->get_expiration_time();
 
             if ( $expiration && strtotime( 'NOW', current_time( 'timestamp' ) ) > $expiration ) {
                 $ret = true;
 
-                if ( 'active' === $subscription_status ) {
+                if ( 'active' === $subscription_status || 'trialing' === $subscription_status ) {
                     $this->expire_subscription();
                 }
             }
@@ -2456,16 +2692,22 @@ final class WPInv_Invoice {
         return apply_filters( 'wpinv_subscription_is_expired', $ret, $this->ID, $this );
     }
     
-    public function get_new_expiration( $item_id = 0 ) {
+    public function get_new_expiration( $item_id = 0, $trial = true ) {
         $item   = new WPInv_Item( $item_id );
         $interval = $item->get_recurring_interval();
         $period = $item->get_recurring_period( true );
+        
+        $expiration_time = strtotime( '+' . $interval . ' ' . $period );
+        
+        if ( $trial && $this->is_free_trial() && $item->has_free_trial() ) {
+            $expiration_time += ( wpinv_period_in_days( $item->get_trial_interval(), $item->get_trial_period() ) * DAY_IN_SECONDS ) ;
+        }
 
-        return date_i18n( 'Y-m-d 23:59:59', strtotime( '+' . $interval . ' ' . $period ) );
+        return date_i18n( 'Y-m-d 23:59:59', $expiration_time );
     }
     
     public function get_subscription_data( $filed = '' ) {
-        $fields = array( 'item_id', 'status', 'period', 'initial_amount', 'recurring_amount', 'interval', 'bill_times', 'expiration', 'profile_id', 'created' );
+        $fields = array( 'item_id', 'status', 'period', 'initial_amount', 'recurring_amount', 'interval', 'bill_times', 'trial_period', 'trial_interval', 'expiration', 'profile_id', 'created', 'cancelled_on' );
         
         $subscription_meta = array();
         foreach ( $fields as $field ) {
@@ -2484,12 +2726,23 @@ final class WPInv_Invoice {
             if ( empty( $subscription_meta['interval'] ) ) {
                 $subscription_meta['interval'] = $item->get_recurring_interval();
             }
+            if ( $item->has_free_trial() ) {
+                if ( empty( $subscription_meta['trial_period'] ) ) {
+                    $subscription_meta['trial_period'] = $item->get_trial_period();
+                }
+                if ( empty( $subscription_meta['trial_interval'] ) ) {
+                    $subscription_meta['trial_interval'] = $item->get_trial_interval();
+                }
+            } else {
+                $subscription_meta['trial_period']      = '';
+                $subscription_meta['trial_interval']    = 0;
+            }
             if ( !$subscription_meta['bill_times'] && $subscription_meta['bill_times'] !== 0 ) {
                 $subscription_meta['bill_times'] = $item->get_recurring_limit();
             }
             if ( $subscription_meta['initial_amount'] === '' || $subscription_meta['recurring_amount'] === '' ) {
-                $subscription_meta['initial_amount']    = wpinv_format_amount( $this->get_total() );
-                $subscription_meta['recurring_amount']  = wpinv_format_amount( $this->get_recurring_details( 'total' ) );
+                $subscription_meta['initial_amount']    = wpinv_round_amount( $this->get_total() );
+                $subscription_meta['recurring_amount']  = wpinv_round_amount( $this->get_recurring_details( 'total' ) );
             }
         }
         
@@ -2503,11 +2756,25 @@ final class WPInv_Invoice {
     }
     
     public function is_paid() {
-        if ( $this->has_status( array( 'publish', 'complete', 'processing', 'renewal' ) ) ) {
+        if ( $this->has_status( array( 'publish', 'wpi-processing', 'wpi-renewal' ) ) ) {
             return true;
         }
         
         return false;
+    }
+    
+    public function is_free() {
+        $is_free = false;
+        
+        if ( !( (float)wpinv_round_amount( $this->get_total() ) > 0 ) ) {
+            if ( $this->is_parent() && $this->is_recurring() ) {
+                $is_free = (float)wpinv_round_amount( $this->get_recurring_details( 'total' ) ) > 0 ? false : true;
+            } else {
+                $is_free = true;
+            }
+        }
+        
+        return apply_filters( 'wpinv_invoice_is_free', $is_free, $this );
     }
     
     public function has_vat() {
@@ -2538,5 +2805,21 @@ final class WPInv_Invoice {
         $item_ids = !empty( $item_ids ) ? implode( ',', array_unique( $item_ids ) ) : '';
         
         update_post_meta( $this->ID, '_wpinv_item_ids', $item_ids );
+    }
+    
+    public function get_invoice_quote_type( $post_id ) {
+        if ( empty( $post_id ) ) {
+            return '';
+        }
+
+        $type = get_post_type( $post_id );
+
+        if ( 'wpi_invoice' === $type ) {
+            $post_type = __('Invoice', 'invoicing');
+        } else{
+            $post_type = __('Quote', 'invoicing');
+        }
+
+        return $post_type;
     }
 }

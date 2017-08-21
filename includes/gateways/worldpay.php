@@ -20,7 +20,7 @@ function wpinv_process_worldpay_payment( $purchase_data ) {
         'user_info'     => $purchase_data['user_info'],
         'cart_details'  => $purchase_data['cart_details'],
         'gateway'       => 'worldpay',
-        'status'        => 'pending'
+        'status'        => 'wpi-pending'
     );
 
     // Record the pending payment
@@ -130,7 +130,7 @@ function wpinv_process_worldpay_ipn() {
                 wpinv_insert_payment_note( $invoice_id, sprintf( __( 'Worldpay Transaction ID: %s', 'invoicing' ), $request['transId'] ) );
                 return;
             } else if ( $request['transStatus'] == 'C' ) {
-                wpinv_update_payment_status( $invoice_id, 'failed' );
+                wpinv_update_payment_status( $invoice_id, 'wpi-failed' );
                 wpinv_insert_payment_note( $invoice_id, __( 'Payment transaction failed while processing Worldpay payment, kindly check IPN log.', 'invoicing' ) );
                 
                 wpinv_record_gateway_error( __( 'IPN Error', 'invoicing' ), sprintf( __( 'Payment transaction failed while processing Worldpay payment. IPN data: %s', 'invoicing' ), json_encode( $request ) ), $invoice_id );

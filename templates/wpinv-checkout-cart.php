@@ -48,7 +48,7 @@ $tax_title          = $use_taxes ? ( wpinv_prices_include_tax() ? wp_sprintf( __
                             echo '<span class="wpinv_checkout_cart_item_title">' . $item_title . '</span>';
                             if ( !empty( $wpi_item ) && $wpi_item->is_package() && !empty( $item['meta']['post_id'] ) ) {
                                 $post_link = !empty( $item['meta']['invoice_title'] ) ? $item['meta']['invoice_title'] : get_the_title( $item['meta']['post_id'] );
-                                $summary = wp_sprintf( __( '%s: %s', 'invoicing' ), $wpi_item->get_cpt_singular_name(), $post_link );
+                                $summary = wp_sprintf( __( '%s: %s', 'invoicing' ), $wpi_item->get_custom_singular_name(), $post_link );
                                 echo '<small class="meta">' . wpautop( wp_kses_post( $summary ) ) . '</small>';
                             }
                             do_action( 'wpinv_checkout_cart_item_title_after', $item, $key );
@@ -136,7 +136,7 @@ $tax_title          = $use_taxes ? ( wpinv_prices_include_tax() ? wp_sprintf( __
                 <?php echo apply_filters( 'wpinv_cart_total_label', '<strong>' . __( 'Total', 'invoicing' ) . ':</strong>', $invoice ); ?>
             </td>
             <td class="wpinv_cart_total text-right">
-                <span class="wpinv_cart_amount bold" data-subtotal="<?php echo wpinv_get_cart_total( $cart_items ); ?>" data-total="<?php echo wpinv_get_cart_total(); ?>"><?php wpinv_cart_total( $cart_items ); ?></span>
+                <span class="wpinv_cart_amount bold" data-subtotal="<?php echo wpinv_get_cart_total( $cart_items ); ?>" data-total="<?php echo wpinv_get_cart_total( NULL, NULL, $invoice ); ?>"><?php wpinv_cart_total( $cart_items, true, $invoice ); ?></span>
             </td>
             <?php do_action( 'wpinv_checkout_table_footer_last' ); ?>
         </tr>

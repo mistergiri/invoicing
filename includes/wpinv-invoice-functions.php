@@ -21,6 +21,463 @@ function wpinv_get_invoice_cart_id() {
     return NULL;
 }
 
+function wpinv_insert_invoice( $invoice_data = array(), $wp_error = false ) {
+    if ( empty( $invoice_data ) ) {
+        return false;
+    }
+    
+    if ( !( !empty( $invoice_data['cart_details'] ) && is_array( $invoice_data['cart_details'] ) ) ) {
+        return $wp_error ? new WP_Error( 'wpinv_invalid_items', __( 'Invoice must have atleast on item.', 'invoicing' ) ) : 0;
+    }
+    
+    if ( empty( $invoice_data['user_id'] ) ) {
+        $invoice_data['user_id'] = get_current_user_id();
+    }
+    
+    $invoice_data['invoice_id'] = !empty( $invoice_data['invoice_id'] ) ? (int)$invoice_data['invoice_id'] : 0;
+    
+    if ( empty( $invoice_data['status'] ) ) {
+        $invoice_data['status'] = 'pending';
+    }
+    
+    if ( empty( $invoice_data['ip'] ) ) {
+        $invoice_data['ip'] = wpinv_get_ip();
+    }
+
+    // default invoice args, note that status is checked for validity in wpinv_create_invoice()
+    $default_args = array(
+        'invoice_id'    => (int)$invoice_data['invoice_id'],
+        'user_id'       => (int)$invoice_data['user_id'],
+        'status'        => $invoice_data['status'],
+    );
+
+    $invoice = wpinv_create_invoice( $default_args, $invoice_data, true );
+    if ( is_wp_error( $invoice ) ) {
+        return $wp_error ? $invoice : 0;
+    }
+    
+    if ( empty( $invoice_data['invoice_id'] ) ) {
+        //$invoice->add_note( wp_sprintf( __( 'Invoice is created with status %s.', 'invoicing' ), wpinv_status_nicename( $invoice->status ) ) );
+    }
+    
+    // User info
+    $default_user_info = array(
+        'user_id'               => '',
+        'first_name'            => '',
+        'last_name'             => '',
+        'email'                 => '',
+        'company'               => '',
+        'phone'                 => '',
+        'address'               => '',
+        'city'                  => '',
+        'country'               => wpinv_get_default_country(),
+        'state'                 => wpinv_get_default_state(),
+        'zip'                   => '',
+        'vat_number'            => '',
+        'vat_rate'              => '',
+        'adddress_confirmed'    => '',
+        'discount'              => array(),
+    );
+
+    if ( $user_id = (int)$invoice->get_user_id() ) {
+        if ( $user_address = wpinv_get_user_address( $user_id ) ) {
+            $default_user_info = wp_parse_args( $user_address, $default_user_info );
+        }
+    }
+    
+    if ( empty( $invoice_data['user_info'] ) ) {
+        $invoice_data['user_info'] = array();
+    }
+    
+    $user_info = wp_parse_args( $invoice_data['user_info'], $default_user_info );
+    
+    if ( empty( $user_info['first_name'] ) ) {
+        $user_info['first_name'] = $default_user_info['first_name'];
+        $user_info['last_name'] = $default_user_info['last_name'];
+    }
+    
+    if ( empty( $user_info['country'] ) ) {
+        $user_info['country'] = $default_user_info['country'];
+        $user_info['state'] = $default_user_info['state'];
+        $user_info['city'] = $default_user_info['city'];
+        $user_info['address'] = $default_user_info['address'];
+        $user_info['zip'] = $default_user_info['zip'];
+        $user_info['phone'] = $default_user_info['phone'];
+    }
+    
+    if ( !empty( $user_info['discount'] ) && !is_array( $user_info['discount'] ) ) {
+        $user_info['discount'] = (array)$user_info['discount'];
+    }
+
+    // Payment details
+    $payment_details = array();
+    if ( !empty( $invoice_data['payment_details'] ) ) {
+        $default_payment_details = array(
+            'gateway'           => 'manual',
+            'gateway_title'     => '',
+            'currency'          => geodir_get_currency_type(),
+            'transaction_id'    => '',
+        );
+        
+        $payment_details = wp_parse_args( $invoice_data['payment_details'], $default_payment_details );
+        
+        if ( empty( $payment_details['gateway'] ) ) {
+            $payment_details['gateway'] = 'manual';
+        }
+        
+        if ( empty( $payment_details['currency'] ) ) {
+            $payment_details['currency'] = geodir_get_currency_type();
+        }
+        
+        if ( empty( $payment_details['gateway_title'] ) ) {
+            $payment_details['gateway_title'] = wpinv_get_gateway_checkout_label( $payment_details['gateway'] );
+        }
+    }
+    
+    $invoice->set( 'status', ( !empty( $invoice_data['status'] ) ? $invoice_data['status'] : 'wpi-pending' ) );
+    
+    if ( !empty( $payment_details ) ) {
+        $invoice->set( 'currency', $payment_details['currency'] );
+        $invoice->set( 'gateway', $payment_details['gateway'] );
+        $invoice->set( 'gateway_title', $payment_details['gateway_title'] );
+        $invoice->set( 'transaction_id', $payment_details['transaction_id'] );
+    }
+    
+    $invoice->set( 'user_info', $user_info );
+    $invoice->set( 'first_name', $user_info['first_name'] );
+    $invoice->set( 'last_name', $user_info['last_name'] );
+    $invoice->set( 'address', $user_info['address'] );
+    $invoice->set( 'company', $user_info['company'] );
+    $invoice->set( 'vat_number', $user_info['vat_number'] );
+    $invoice->set( 'phone', $user_info['phone'] );
+    $invoice->set( 'city', $user_info['city'] );
+    $invoice->set( 'country', $user_info['country'] );
+    $invoice->set( 'state', $user_info['state'] );
+    $invoice->set( 'zip', $user_info['zip'] );
+    $invoice->set( 'discounts', $user_info['discount'] );
+    $invoice->set( 'ip', ( !empty( $invoice_data['ip'] ) ? $invoice_data['ip'] : wpinv_get_ip() ) );
+    if ( !empty( $invoice_data['invoice_key'] ) ) {
+        $invoice->set( 'key', $invoice_data['invoice_key'] );
+    }
+    $invoice->set( 'mode', ( wpinv_is_test_mode() ? 'test' : 'live' ) );
+    $invoice->set( 'parent_invoice', ( !empty( $invoice_data['parent'] ) ? absint( $invoice_data['parent'] ) : '' ) );
+    
+    if ( !empty( $invoice_data['cart_details'] ) && is_array( $invoice_data['cart_details'] ) ) {
+        foreach ( $invoice_data['cart_details'] as $key => $item ) {
+            $item_id        = !empty( $item['id'] ) ? $item['id'] : 0;
+            $quantity       = !empty( $item['quantity'] ) ? $item['quantity'] : 1;
+            $name           = !empty( $item['name'] ) ? $item['name'] : '';
+            $item_price     = isset( $item['item_price'] ) ? $item['item_price'] : '';
+            
+            $post_item  = new WPInv_Item( $item_id );
+            if ( !empty( $post_item ) ) {
+                $name       = !empty( $name ) ? $name : $post_item->get_name();
+                $item_price = $item_price !== '' ? $item_price : $post_item->get_price();
+            } else {
+                continue;
+            }
+            
+            $args = array(
+                'name'          => $name,
+                'quantity'      => $quantity,
+                'item_price'    => $item_price,
+                'custom_price'  => isset( $item['custom_price'] ) ? $item['custom_price'] : '',
+                'tax'           => !empty( $item['tax'] ) ? $item['tax'] : 0.00,
+                'discount'      => isset( $item['discount'] ) ? $item['discount'] : 0,
+                'meta'          => isset( $item['meta'] ) ? $item['meta'] : array(),
+                'fees'          => isset( $item['fees'] ) ? $item['fees'] : array(),
+            );
+
+            $invoice->add_item( $item_id, $args );
+        }
+    }
+
+    $invoice->increase_tax( wpinv_get_cart_fee_tax() );
+
+    if ( isset( $invoice_data['post_date'] ) ) {
+        $invoice->set( 'date', $invoice_data['post_date'] );
+    }
+    
+    // Invoice due date
+    if ( isset( $invoice_data['due_date'] ) ) {
+        $invoice->set( 'due_date', $invoice_data['due_date'] );
+    }
+    
+    $invoice->save();
+    
+    // Add notes
+    if ( !empty( $invoice_data['private_note'] ) ) {
+        $invoice->add_note( $invoice_data['private_note'] );
+    }
+    if ( !empty( $invoice_data['user_note'] ) ) {
+        $invoice->add_note( $invoice_data['user_note'], true );
+    }
+    
+    do_action( 'wpinv_insert_invoice', $invoice->ID, $invoice_data );
+
+    if ( ! empty( $invoice->ID ) ) {
+        global $wpi_userID, $wpinv_ip_address_country;
+        
+        $checkout_session = wpinv_get_checkout_session();
+        
+        $data_session                   = array();
+        $data_session['invoice_id']     = $invoice->ID;
+        $data_session['cart_discounts'] = $invoice->get_discounts( true );
+        
+        wpinv_set_checkout_session( $data_session );
+        
+        $wpi_userID         = (int)$invoice->get_user_id();
+        
+        $_POST['country']   = !empty( $invoice->country ) ? $invoice->country : wpinv_get_default_country();
+        $_POST['state']     = $invoice->state;
+
+        $invoice->set( 'country', sanitize_text_field( $_POST['country'] ) );
+        $invoice->set( 'state', sanitize_text_field( $_POST['state'] ) );
+        
+        $wpinv_ip_address_country = $invoice->country;
+        
+        $invoice = $invoice->recalculate_totals( true );
+        
+        wpinv_set_checkout_session( $checkout_session );
+                    
+        return $invoice;
+    }
+    
+    if ( $wp_error ) {
+        if ( is_wp_error( $invoice ) ) {
+            return $invoice;
+        } else {
+            return new WP_Error( 'wpinv_insert_invoice_error', __( 'Error in insert invoice.', 'invoicing' ) );
+        }
+    } else {
+        return 0;
+    }
+}
+
+function wpinv_update_invoice( $invoice_data = array(), $wp_error = false ) {
+    $invoice_ID = !empty( $invoice_data['ID'] ) ? absint( $invoice_data['ID'] ) : NULL;
+
+    if ( !$invoice_ID ) {
+        if ( $wp_error ) {
+            return new WP_Error( 'invalid_invoice_id', __( 'Invalid invoice ID.', 'invoicing' ) );
+        }
+        return 0;
+    }
+
+    $invoice = wpinv_get_invoice( $invoice_ID );
+
+    $recurring_item = $invoice->is_recurring() ? $invoice->get_recurring( true ) : NULL;
+
+    if ( empty( $invoice->ID ) ) {
+        if ( $wp_error ) {
+            return new WP_Error( 'invalid_invoice', __( 'Invalid invoice.', 'invoicing' ) );
+        }
+        return 0;
+    }
+
+    if ( !$invoice->has_status( array( 'wpi-pending' ) ) ) {
+        if ( $wp_error ) {
+            return new WP_Error( 'invalid_invoice_status', __( 'Only invoice with pending payment is allowed to update.', 'invoicing' ) );
+        }
+        return 0;
+    }
+
+    // Invoice status
+    if ( !empty( $invoice_data['status'] ) ) {
+        $invoice->set( 'status', $invoice_data['status'] );
+    }
+
+    // Invoice date
+    if ( !empty( $invoice_data['post_date'] ) ) {
+        $invoice->set( 'date', $invoice_data['post_date'] );
+    }
+
+    // Invoice due date
+    if ( isset( $invoice_data['due_date'] ) ) {
+        $invoice->set( 'due_date', $invoice_data['due_date'] );
+    }
+
+    // Invoice IP address
+    if ( !empty( $invoice_data['ip'] ) ) {
+        $invoice->set( 'ip', $invoice_data['ip'] );
+    }
+
+    // Invoice key
+    if ( !empty( $invoice_data['invoice_key'] ) ) {
+        $invoice->set( 'key', $invoice_data['invoice_key'] );
+    }
+    
+    // User info
+    if ( !empty( $invoice_data['user_info'] ) && is_array( $invoice_data['user_info'] ) ) {
+        $user_info = wp_parse_args( $invoice_data['user_info'], $invoice->user_info );
+
+        if ( $discounts = $invoice->get_discounts() ) {
+            $set_discount = $discounts;
+        } else {
+            $set_discount = '';
+        }
+
+        // Manage discount
+        if ( !empty( $invoice_data['user_info']['discount'] ) ) {
+            // Remove discount
+            if ( $invoice_data['user_info']['discount'] == 'none' ) {
+                $set_discount = '';
+            } else {
+                $set_discount = $invoice_data['user_info']['discount'];
+            }
+
+            $invoice->set( 'discounts', $set_discount );
+        }
+
+        $user_info['discount'] = $set_discount;
+
+        $invoice->set( 'user_info', $user_info );
+    }
+
+    if ( !empty( $invoice_data['cart_details'] ) && is_array( $invoice_data['cart_details'] ) && $cart_details = $invoice_data['cart_details'] ) {
+        $remove_items = !empty( $cart_details['remove_items'] ) && is_array( $cart_details['remove_items'] ) ? $cart_details['remove_items'] : array();
+
+        if ( !empty( $remove_items[0]['id'] ) ) {
+            foreach ( $remove_items as $item ) {
+                $item_id        = !empty( $item['id'] ) ? $item['id'] : 0;
+                $quantity       = !empty( $item['quantity'] ) ? $item['quantity'] : 1;
+                if ( empty( $item_id ) ) {
+                    continue;
+                }
+
+                foreach ( $invoice->cart_details as $cart_index => $cart_item ) {
+                    if ( $item_id == $cart_item['id'] ) {
+                        $args = array(
+                            'id'         => $item_id,
+                            'quantity'   => $quantity,
+                            'cart_index' => $cart_index
+                        );
+
+                        $invoice->remove_item( $item_id, $args );
+                        break;
+                    }
+                }
+            }
+        }
+
+        $add_items = !empty( $cart_details['add_items'] ) && is_array( $cart_details['add_items'] ) ? $cart_details['add_items'] : array();
+
+        if ( !empty( $add_items[0]['id'] ) ) {
+            foreach ( $add_items as $item ) {
+                $item_id        = !empty( $item['id'] ) ? $item['id'] : 0;
+                $post_item      = new WPInv_Item( $item_id );
+                if ( empty( $post_item ) ) {
+                    continue;
+                }
+
+                $valid_item = true;
+                if ( !empty( $recurring_item ) ) {
+                    if ( $recurring_item->ID != $item_id ) {
+                        $valid_item = false;
+                    }
+                } else if ( wpinv_is_recurring_item( $item_id ) ) {
+                    $valid_item = false;
+                }
+                
+                if ( !$valid_item ) {
+                    if ( $wp_error ) {
+                        return new WP_Error( 'invalid_invoice_item', __( 'You can not add item to invoice because recurring item must be paid individually!', 'invoicing' ) );
+                    }
+                    return 0;
+                }
+
+                $quantity       = !empty( $item['quantity'] ) ? $item['quantity'] : 1;
+                $name           = !empty( $item['name'] ) ? $item['name'] : $post_item->get_name();
+                $item_price     = isset( $item['item_price'] ) ? $item['item_price'] : $post_item->get_price();
+
+                $args = array(
+                    'name'          => $name,
+                    'quantity'      => $quantity,
+                    'item_price'    => $item_price,
+                    'custom_price'  => isset( $item['custom_price'] ) ? $item['custom_price'] : '',
+                    'tax'           => !empty( $item['tax'] ) ? $item['tax'] : 0,
+                    'discount'      => isset( $item['discount'] ) ? $item['discount'] : 0,
+                    'meta'          => isset( $item['meta'] ) ? $item['meta'] : array(),
+                    'fees'          => isset( $item['fees'] ) ? $item['fees'] : array(),
+                );
+
+                $invoice->add_item( $item_id, $args );
+            }
+        }
+    }
+    
+    // Payment details
+    if ( !empty( $invoice_data['payment_details'] ) && $payment_details = $invoice_data['payment_details'] ) {
+        if ( !empty( $payment_details['gateway'] ) ) {
+            $invoice->set( 'gateway', $payment_details['gateway'] );
+        }
+
+        if ( !empty( $payment_details['transaction_id'] ) ) {
+            $invoice->set( 'transaction_id', $payment_details['transaction_id'] );
+        }
+    }
+
+    do_action( 'wpinv_pre_update_invoice', $invoice->ID, $invoice_data );
+
+    // Parent invoice
+    if ( !empty( $invoice_data['parent'] ) ) {
+        $invoice->set( 'parent_invoice', $invoice_data['parent'] );
+    }
+
+    // Save invoice data.
+    $invoice->save();
+    
+    if ( empty( $invoice->ID ) || is_wp_error( $invoice ) ) {
+        if ( $wp_error ) {
+            if ( is_wp_error( $invoice ) ) {
+                return $invoice;
+            } else {
+                return new WP_Error( 'wpinv_update_invoice_error', __( 'Error in update invoice.', 'invoicing' ) );
+            }
+        } else {
+            return 0;
+        }
+    }
+
+    // Add private note
+    if ( !empty( $invoice_data['private_note'] ) ) {
+        $invoice->add_note( $invoice_data['private_note'] );
+    }
+
+    // Add user note
+    if ( !empty( $invoice_data['user_note'] ) ) {
+        $invoice->add_note( $invoice_data['user_note'], true );
+    }
+
+    global $wpi_userID, $wpinv_ip_address_country;
+
+    $checkout_session = wpinv_get_checkout_session();
+
+    $data_session                   = array();
+    $data_session['invoice_id']     = $invoice->ID;
+    $data_session['cart_discounts'] = $invoice->get_discounts( true );
+
+    wpinv_set_checkout_session( $data_session );
+
+    $wpi_userID         = (int)$invoice->get_user_id();
+
+    $_POST['country']   = !empty( $invoice->country ) ? $invoice->country : wpinv_get_default_country();
+    $_POST['state']     = $invoice->state;
+
+    $invoice->set( 'country', sanitize_text_field( $_POST['country'] ) );
+    $invoice->set( 'state', sanitize_text_field( $_POST['state'] ) );
+
+    $wpinv_ip_address_country = $invoice->country;
+
+    $invoice = $invoice->recalculate_totals( true );
+
+    do_action( 'wpinv_post_update_invoice', $invoice->ID, $invoice_data );
+
+    wpinv_set_checkout_session( $checkout_session );
+
+    return $invoice;
+}
+
 function wpinv_get_invoice( $invoice_id = 0, $cart = false ) {
     if ( $cart && empty( $invoice_id ) ) {
         $invoice_id = (int)wpinv_get_invoice_cart_id();
@@ -275,17 +732,19 @@ function wpinv_get_cart_subtotal( $items = array() ) {
 function wpinv_cart_subtotal( $items = array() ) {
     $price = wpinv_price( wpinv_format_amount( wpinv_get_cart_subtotal( $items ) ) );
 
-    // Todo - Show tax labels here (if needed)
-
     return $price;
 }
 
-function wpinv_get_cart_total( $items = array(), $discounts = false ) {
+function wpinv_get_cart_total( $items = array(), $discounts = false, $invoice = array() ) {
     $subtotal  = (float)wpinv_get_cart_subtotal( $items );
     $discounts = (float)wpinv_get_cart_discounted_amount( $items );
     $cart_tax  = (float)wpinv_get_cart_tax( $items );
     $fees      = (float)wpinv_get_cart_fee_total();
-    $total     = $subtotal - $discounts + $cart_tax + $fees;
+    if ( !empty( $invoice ) && $invoice->is_free_trial() ) {
+        $total = 0;
+    } else {
+        $total     = $subtotal - $discounts + $cart_tax + $fees;
+    }
 
     if ( $total < 0 ) {
         $total = 0.00;
@@ -296,12 +755,10 @@ function wpinv_get_cart_total( $items = array(), $discounts = false ) {
     return wpinv_sanitize_amount( $total );
 }
 
-function wpinv_cart_total( $cart_items = array(), $echo = true ) {
+function wpinv_cart_total( $cart_items = array(), $echo = true, $invoice = array() ) {
     global $cart_total;
-    $total = wpinv_price( wpinv_format_amount( wpinv_get_cart_total( $cart_items ) ) );
-    $total = apply_filters( 'wpinv_cart_total', $total, $cart_items );
-
-    // Todo - Show tax labels here (if needed)
+    $total = wpinv_price( wpinv_format_amount( wpinv_get_cart_total( $cart_items, NULL, $invoice ) ) );
+    $total = apply_filters( 'wpinv_cart_total', $total, $cart_items, $invoice );
     
     $cart_total = $total;
 
@@ -439,6 +896,18 @@ function wpinv_cart_has_recurring_item() {
     return apply_filters( 'wpinv_cart_has_recurring_item', $has_subscription, $cart_items );
 }
 
+function wpinv_cart_has_free_trial() {
+    $invoice = wpinv_get_invoice_cart();
+    
+    $free_trial = false;
+    
+    if ( !empty( $invoice ) && $invoice->is_free_trial() ) {
+        $free_trial = true;
+    }
+    
+    return apply_filters( 'wpinv_cart_has_free_trial', $free_trial, $invoice );
+}
+
 function wpinv_get_cart_contents() {
     $cart_details = wpinv_get_cart_details();
     
@@ -473,7 +942,15 @@ function wpinv_get_cart_content_details() {
         $wpi_current_id         = $invoice->ID;
         $wpi_item_id            = $item_id;
         
-        $item_price         = wpinv_get_item_price( $item_id );
+        if ( isset( $item['custom_price'] ) && $item['custom_price'] !== '' ) {
+            $item_price = $item['custom_price'];
+        } else {
+            if ( isset( $item['item_price'] ) && $item['item_price'] !== '' && $item['item_price'] !== false ) {
+                $item_price = $item['item_price'];
+            } else {
+                $item_price = wpinv_get_item_price( $item_id );
+            }
+        }
         $discount           = wpinv_get_cart_item_discount_amount( $item );
         $discount           = apply_filters( 'wpinv_get_cart_content_details_item_discount_amount', $discount, $item );
         $quantity           = wpinv_get_cart_item_quantity( $item );
@@ -485,7 +962,7 @@ function wpinv_get_cart_content_details() {
         $tax                = wpinv_get_cart_item_tax( $item_id, $subtotal - $discount );
         
         if ( wpinv_prices_include_tax() ) {
-            $subtotal -= wpinv_format_amount( $tax, NULL, true );
+            $subtotal -= wpinv_round_amount( $tax );
         }
         
         $total              = $subtotal - $discount + $tax;
@@ -498,14 +975,15 @@ function wpinv_get_cart_content_details() {
         $details[ $key ]  = array(
             'id'                => $item_id,
             'name'              => !empty($item['name']) ? $item['name'] : get_the_title( $item_id ),
-            'item_price'        => wpinv_format_amount( $item_price, NULL, true ),
+            'item_price'        => wpinv_round_amount( $item_price ),
+            'custom_price'      => isset( $item['custom_price'] ) ? $item['custom_price'] : '',
             'quantity'          => $quantity,
-            'discount'          => wpinv_format_amount( $discount, NULL, true ),
-            'subtotal'          => wpinv_format_amount( $subtotal, NULL, true ),
-            'tax'               => wpinv_format_amount( $tax, NULL, true ),
-            'price'             => wpinv_format_amount( $total, NULL, true ),
+            'discount'          => wpinv_round_amount( $discount ),
+            'subtotal'          => wpinv_round_amount( $subtotal ),
+            'tax'               => wpinv_round_amount( $tax ),
+            'price'             => wpinv_round_amount( $total ),
             'vat_rates_class'   => $tax_class,
-            'vat_rate'          => wpinv_format_amount( $tax_rate, NULL, true ),
+            'vat_rate'          => $tax_rate,
             'meta'              => isset( $item['meta'] ) ? $item['meta'] : array(),
             'fees'              => $fees,
         );
@@ -541,6 +1019,10 @@ function wpinv_get_cart_details( $invoice_id = 0 ) {
 }
 
 function wpinv_record_status_change( $invoice_id, $new_status, $old_status ) {
+    if ( 'wpi_invoice' != get_post_type( $invoice_id ) ) {
+        return;
+    }
+
     $invoice    = wpinv_get_invoice( $invoice_id );
     
     $old_status = wpinv_status_nicename( $old_status );
@@ -549,17 +1031,21 @@ function wpinv_record_status_change( $invoice_id, $new_status, $old_status ) {
     $status_change = sprintf( __( 'Invoice status changed from %s to %s', 'invoicing' ), $old_status, $new_status );
     
     // Add note
-    return $invoice->add_note( $status_change, 0 );
+    return $invoice->add_note( $status_change, false, false, true );
 }
 add_action( 'wpinv_update_status', 'wpinv_record_status_change', 100, 3 );
 
 function wpinv_complete_payment( $invoice_id, $new_status, $old_status ) {
-    if ( $old_status == 'publish' || $old_status == 'complete' ) {
+    global $wpi_has_free_trial;
+    
+    $wpi_has_free_trial = false;
+    
+    if ( $old_status == 'publish' ) {
         return; // Make sure that payments are only paid once
     }
 
     // Make sure the payment completion is only processed when new status is paid
-    if ( $new_status != 'publish' && $new_status != 'complete' ) {
+    if ( $new_status != 'publish' ) {
         return;
     }
 
@@ -568,6 +1054,7 @@ function wpinv_complete_payment( $invoice_id, $new_status, $old_status ) {
         return;
     }
 
+    $wpi_has_free_trial = $invoice->is_free_trial();
     $completed_date = $invoice->completed_date;
     $cart_details   = $invoice->cart_details;
 
@@ -647,13 +1134,18 @@ function wpinv_validate_checkout_fields() {
 function wpinv_checkout_validate_gateway() {
     $gateway = wpinv_get_default_gateway();
     
-    $has_subscription = wpinv_cart_has_recurring_item();
+    $invoice = wpinv_get_invoice_cart();
+    $has_subscription = $invoice->is_recurring();
+    if ( empty( $invoice ) ) {
+        wpinv_set_error( 'invalid_invoice', __( 'Your cart is empty.', 'invoicing' ) );
+        return $gateway;
+    }
 
     // Check if a gateway value is present
     if ( !empty( $_REQUEST['wpi-gateway'] ) ) {
         $gateway = sanitize_text_field( $_REQUEST['wpi-gateway'] );
 
-        if ( '0.00' == wpinv_get_cart_total() ) {
+        if ( $invoice->is_free() ) {
             $gateway = 'manual';
         } elseif ( !wpinv_is_gateway_active( $gateway ) ) {
             wpinv_set_error( 'invalid_gateway', __( 'The selected payment gateway is not enabled', 'invoicing' ) );
@@ -1130,7 +1622,7 @@ function wpinv_process_checkout() {
         // Add the VAT rate to each item in the cart
         foreach( $invoice_data['cart_details'] as $key => $item_data) {
             $rate = wpinv_get_tax_rate($invoice_data['user_info']['country'], $invoice_data['user_info']['state'], $item_data['id']);
-            $invoice_data['cart_details'][$key]['vat_rate'] = round( $rate, 3 );
+            $invoice_data['cart_details'][$key]['vat_rate'] = wpinv_round_amount( $rate, 4 );
         }
     }
     
@@ -1216,7 +1708,7 @@ function wpinv_get_invoices( $args ) {
             $args[ $to ] = $args[ $from ];
         }
     }
-    
+
     if ( get_query_var( 'paged' ) )
         $args['page'] = get_query_var('paged');
     else if ( get_query_var( 'page' ) )
@@ -1411,6 +1903,8 @@ function wpinv_pay_for_invoice() {
             wpinv_die();
         }
         
+        do_action( 'wpinv_check_pay_for_invoice', $invoice_key );
+
         $invoice_id    = wpinv_get_invoice_id_by_key( $invoice_key );
         $user_can_view = wpinv_can_view_receipt( $invoice_key );
         if ( $user_can_view && isset( $_GET['invoice-id'] ) ) {
@@ -1434,10 +1928,12 @@ function wpinv_pay_for_invoice() {
                 }
                 
             } else {
-                wpinv_set_error( 'invalid_invoice', __( 'This invoice not allowed to pay', 'invoicing' ) );
+                $checkout_uri = $invoice->get_view_url();
             }
         } else {
             wpinv_set_error( 'invalid_invoice', __( 'You are not allowed to view this invoice', 'invoicing' ) );
+            
+            $checkout_uri = is_user_logged_in() ? wpinv_get_history_page_uri() : wp_login_url( get_permalink() );
         }
         
         wp_redirect( $checkout_uri );
@@ -1445,6 +1941,23 @@ function wpinv_pay_for_invoice() {
     }
 }
 add_action( 'wpinv_pay_for_invoice', 'wpinv_pay_for_invoice' );
+
+function wpinv_handle_pay_via_invoice_link( $invoice_key ) {
+    if ( !empty( $invoice_key ) && !empty( $_REQUEST['_wpipay'] ) && !is_user_logged_in() && $invoice_id = wpinv_get_invoice_id_by_key( $invoice_key ) ) {
+        if ( $invoice = wpinv_get_invoice( $invoice_id ) ) {
+            $user_id = $invoice->get_user_id();
+            $secret = sanitize_text_field( $_GET['_wpipay'] );
+            
+            if ( $secret === md5( $user_id . '::' . $invoice->get_email() . '::' . $invoice_key ) ) { // valid invoice link
+                $redirect_to = remove_query_arg( '_wpipay', get_permalink() );
+                
+                wpinv_guest_redirect( $redirect_to, $user_id );
+                wpinv_die();
+            }
+        }
+    }
+}
+add_action( 'wpinv_check_pay_for_invoice', 'wpinv_handle_pay_via_invoice_link' );
 
 function wpinv_set_payment_transaction_id( $invoice_id = 0, $transaction_id = '' ) {
     $invoice_id = is_object( $invoice_id ) && !empty( $invoice_id->ID ) ? $invoice_id : $invoice_id;
@@ -1469,21 +1982,20 @@ function wpinv_invoice_status_label( $status, $status_display = '' ) {
     
     switch ( $status ) {
         case 'publish' :
-        case 'complete' :
-        case 'renewal' :
+        case 'wpi-renewal' :
             $class = 'label-success';
         break;
-        case 'pending' :
+        case 'wpi-pending' :
             $class = 'label-primary';
         break;
-        case 'processing' :
+        case 'wpi-processing' :
             $class = 'label-warning';
         break;
-        case 'onhold' :
+        case 'wpi-onhold' :
             $class = 'label-info';
         break;
-        case 'cancelled' :
-        case 'failed' :
+        case 'wpi-cancelled' :
+        case 'wpi-failed' :
             $class = 'label-danger';
         break;
         default:
@@ -1494,4 +2006,128 @@ function wpinv_invoice_status_label( $status, $status_display = '' ) {
     $label = '<span class="label label-inv-' . $status . ' ' . $class . '">' . $status_display . '</span>';
     
     return apply_filters( 'wpinv_invoice_status_label', $label, $status, $status_display );
+}
+
+function wpinv_format_invoice_number( $number ) {
+    $padd  = wpinv_get_option( 'invoice_number_padd' );
+    
+    // TODO maintain old invoice numbers if invoice number settings not saved. Should be removed before stable release.
+    if ( $padd === '' || $padd === false || $padd === NULL ) {
+        return wp_sprintf( __( 'WPINV-%d', 'invoicing' ), $number );
+    }
+    
+    $prefix  = wpinv_get_option( 'invoice_number_prefix' );
+    $postfix = wpinv_get_option( 'invoice_number_postfix' );
+    
+    $padd = absint( $padd );
+    $formatted_number = absint( $number );
+    
+    if ( $padd > 0 ) {
+        $formatted_number = zeroise( $formatted_number, $padd );
+    }    
+
+    $formatted_number = $prefix . $formatted_number . $postfix;
+
+    return apply_filters( 'wpinv_format_invoice_number', $formatted_number, $number, $prefix, $postfix, $padd );
+}
+
+function wpinv_get_next_invoice_number() {
+    if ( ! wpinv_get_option( 'sequential_invoice_number' ) ) {
+        return false;
+    }
+
+    $number           = get_option( 'wpinv_last_invoice_number' );
+    $start            = wpinv_get_option( 'invoice_sequence_start', 1 );
+    $increment_number = true;
+
+    if ( false !== $number ) {
+        if ( empty( $number ) ) {
+            $number = $start;
+            $increment_number = false;
+        }
+    } else {
+        $last_invoice = wpinv_get_invoices( array( 'limit' => 1, 'order' => 'DESC', 'orderby' => 'ID', 'return' => 'posts', 'fields' => 'ids', 'status' => 'any' ) );
+
+        if ( ! empty( $last_invoice[0] ) ) {
+            $number = wpinv_get_invoice_number( $last_invoice[0] );
+        }
+
+        if ( ! empty( $number ) && ! empty( $last_invoice[0] ) && $number !== (int) $last_invoice[0] ) {
+            $number = wpinv_clean_invoice_number( $number );
+        } else {
+            $number = $start;
+            $increment_number = false;
+        }
+    }
+
+    $increment_number = apply_filters( 'wpinv_increment_payment_number', $increment_number, $number );
+
+    if ( $increment_number ) {
+        $number++;
+    }
+
+    return apply_filters( 'wpinv_get_next_invoice_number', $number );
+}
+
+function wpinv_clean_invoice_number( $number ) {
+    $prefix  = wpinv_get_option( 'invoice_number_prefix' );
+    $postfix = wpinv_get_option( 'invoice_number_postfix' );
+
+    $number = preg_replace( '/' . $prefix . '/', '', $number, 1 );
+
+    $length      = strlen( $number );
+    $postfix_pos = strrpos( $number, $postfix );
+    
+    if ( false !== $postfix_pos ) {
+        $number      = substr_replace( $number, '', $postfix_pos, $length );
+    }
+
+    $number = intval( $number );
+
+    return apply_filters( 'wpinv_clean_invoice_number', $number, $prefix, $postfix );
+}
+
+function wpinv_save_number_post_saved( $post_ID, $post, $update ) {
+    global $wpdb;
+
+    if ( !$update && !get_post_meta( $post_ID, '_wpinv_number', true ) ) {
+        wpinv_update_invoice_number( $post_ID, $post->post_status != 'auto-draft' );
+    }
+
+    if ( !$update ) {
+        $wpdb->update( $wpdb->posts, array( 'post_name' => 'inv-' . $post_ID ), array( 'ID' => $post_ID ) );
+        clean_post_cache( $post_ID );
+    }
+}
+add_action( 'save_post_wpi_invoice', 'wpinv_save_number_post_saved', 1, 3 );
+
+function wpinv_save_number_post_updated( $post_ID, $post_after, $post_before ) {
+    if ( !empty( $post_after->post_type ) && $post_after->post_type == 'wpi_invoice' && $post_before->post_status == 'auto-draft' && $post_after->post_status != $post_before->post_status ) {
+        wpinv_update_invoice_number( $post_ID, true );
+    }
+}
+add_action( 'post_updated', 'wpinv_save_number_post_updated', 1, 3 );
+
+function wpinv_update_invoice_number( $post_ID, $save_sequential = false ) {
+    global $wpdb;
+
+    if ( wpinv_get_option( 'sequential_invoice_number' ) ) {
+        $number = wpinv_get_next_invoice_number();
+
+        if ( $save_sequential ) {
+            update_option( 'wpinv_last_invoice_number', $number );
+        }
+    } else {
+        $number = $post_ID;
+    }
+
+    $number = wpinv_format_invoice_number( $number );
+
+    update_post_meta( $post_ID, '_wpinv_number', $number );
+
+    $wpdb->update( $wpdb->posts, array( 'post_title' => $number ), array( 'ID' => $post_ID ) );
+
+    clean_post_cache( $post_ID );
+
+    return $number;
 }

@@ -12,41 +12,29 @@ jQuery(function($) {
         if (valid) {
             return true;
         }
-        var fields = ['first_name', 'email', 'address', 'city', 'country', 'state'];
-        var err = [];
-        $.each(fields, function(i, field) {
-            if ($('#wpinv_' + field).length && !$('#wpinv_' + field).val()) {
-                err.push(field);
+        e.preventDefault();
+        wpinvBlock($form);
+        var data = $form.serialize();
+        data = wpinvRemoveQueryVar(data, 'action');
+        data = wpinvRemoveQueryVar(data, 'wpinv_ajax');
+        $.post(ajaxurl, data + '&action=wpinv_checkout', function(res) {
+            if (res && typeof res == 'object' && res.success) {
+                valid = true;
+                var data = new Object();
+                data.form = $form;
+                data.totals = res.data;
+                jQuery('body').trigger('wpinv_checkout_submit', data);
+                if (window.wpiSubmit) {
+                    $form.submit();
+                }
+            } else {
+                $form.unblock();
+                if (res && res.search("wpinv_adddress_confirm") !== -1) {
+                    $('#wpinv_adddress_confirm').show();
+                }
+                $('#wpinv_purchase_submit', $form).before(res);
             }
         });
-        if (err && err.length > 0) {
-            $('#wpinv_' + err[0]).focus();
-            return false;
-        } else {
-            e.preventDefault();
-            wpinvBlock($form);
-            var data = $form.serialize();
-            data = wpinvRemoveQueryVar(data, 'action');
-            data = wpinvRemoveQueryVar(data, 'wpinv_ajax');
-            $.post(ajaxurl, data + '&action=wpinv_checkout', function(res) {
-                if (res && typeof res == 'object' && res.success) {
-                    valid = true;
-                    var data = new Object();
-                    data.form = $form;
-                    data.totals = res.data;
-                    jQuery('body').trigger('wpinv_checkout_submit', data);
-                    if (window.wpiSubmit) {
-                        $form.submit();
-                    }
-                } else {
-                    $form.unblock();
-                    if (res && res.search("#wpinv_adddress_confirm") !== 0) {
-                        $('#wpinv_adddress_confirm').show();
-                    }
-                    $('#wpinv_purchase_submit', $form).before(res);
-                }
-            });
-        }
         return false;
     });
     var elB = $('#wpinv-fields');
@@ -143,6 +131,7 @@ jQuery(function($) {
             } else {
                 $('div.payment_box').show();
             }
+            $('#wpinv_payment_mode_select').attr('data-gateway', $(this).val());
             if ($(this).data('button-text')) {
                 $('#wpinv-payment-button').val($(this).data('button-text'));
             } else {
@@ -190,12 +179,14 @@ jQuery(function($) {
                             $('#wpinv_discount_code', $box).val('');
                             //console.log('217 : wpinv_recalculate_taxes()');
                             //wpinv_recalculate_taxes();
-                            if ('0.00' == res.data.total_row) {
+                            if (res.data.free) {
                                 $('#wpinv_payment_mode_select', $this.checkout_form).hide();
-                                $('input[name="wpi-gateway"]', $this.checkout_form).val('manual');
+                                gw = 'manual';
                             } else {
                                 $('#wpinv_payment_mode_select', $this.checkout_form).show();
+                                gw = $('#wpinv_payment_mode_select', $this.checkout_form).attr('data-gateway');
                             }
+                            $('.wpi-payment_methods .wpi-pmethod[value="' + gw + '"]', $this.checkout_form).prop('checked', true);
                             $(document.body).trigger('wpinv_discount_applied', [res]);
                         }
                         if (res.msg) {
@@ -243,15 +234,15 @@ jQuery(function($) {
                         if (res.success) {
                             jQuery('#wpinv_checkout_cart_form', $this.checkout_form).replaceWith(res.data.html);
                             jQuery('.wpinv-chdeckout-total').text(res.data.total);
-                            var zero = '0' + WPInv.decimal_separator + '00';
-                            $('.wpinv_cart_amount').each(function() {
-                                if (WPInv.currency_sign + zero == $(this).data('total') || zero + WPInv.currency_sign == $(this).data('total')) {
-                                    // We are removing a 100% discount code so we need to force the payment gateway to reload
-                                    window.location.reload();
-                                }
-                                $(this).text(res.data.total);
-                            });
-                            console.log('291 : wpinv_recalculate_taxes()');
+                            if (res.data.free) {
+                                $('#wpinv_payment_mode_select', $this.checkout_form).hide();
+                                gw = 'manual';
+                            } else {
+                                $('#wpinv_payment_mode_select', $this.checkout_form).show();
+                                gw = $('#wpinv_payment_mode_select', $this.checkout_form).attr('data-gateway');
+                            }
+                            $('input[name="wpi-gateway"][value="' + gw + '"]', $this.checkout_form).prop('checked', true);
+                            //console.log('291 : wpinv_recalculate_taxes()');
                             //wpinv_recalculate_taxes();
                             $(document.body).trigger('wpinv_discount_removed', [res]);
                         }

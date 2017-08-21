@@ -195,7 +195,7 @@ function wpinv_transaction_query( $type = 'start' ) {
     }
 }
 
-function wpinv_create_invoice( $args = array(), $data = array() ) {
+function wpinv_create_invoice( $args = array(), $data = array(), $wp_error = false ) {
     $default_args = array(
         'status'        => '',
         'user_id'       => null,
@@ -215,10 +215,10 @@ function wpinv_create_invoice( $args = array(), $data = array() ) {
     } else {
         $updating                       = false;
         $invoice_data['post_type']      = 'wpi_invoice';
-        $invoice_data['post_status']    = apply_filters( 'wpinv_default_invoice_status', 'pending' );
+        $invoice_data['post_status']    = apply_filters( 'wpinv_default_invoice_status', 'wpi-pending' );
         $invoice_data['ping_status']    = 'closed';
         $invoice_data['post_author']    = !empty( $args['user_id'] ) ? $args['user_id'] : get_current_user_id();
-        $invoice_data['post_title']     = __( 'WPINV-', 'invoicing' );
+        $invoice_data['post_title']     = wpinv_format_invoice_number( '0' );
         $invoice_data['post_parent']    = absint( $args['parent'] );
         if ( !empty( $args['created_date'] ) ) {
             $invoice_data['post_date']      = $args['created_date'];
@@ -228,7 +228,7 @@ function wpinv_create_invoice( $args = array(), $data = array() ) {
 
     if ( $args['status'] ) {
         if ( ! in_array( $args['status'], array_keys( wpinv_get_invoice_statuses() ) ) ) {
-            return new WP_Error( 'wpinv_invalid_invoice_status', __( 'Invalid invoice status', 'invoicing' ) );
+            return new WP_Error( 'wpinv_invalid_invoice_status', wp_sprintf( __( 'Invalid invoice status: %s', 'invoicing' ), $args['status'] ) );
         }
         $invoice_data['post_status']    = $args['status'];
     }
@@ -238,21 +238,16 @@ function wpinv_create_invoice( $args = array(), $data = array() ) {
     }
 
     if ( $updating ) {
-        $invoice_id = wp_update_post( $invoice_data );
+        $invoice_id = wp_update_post( $invoice_data, true );
     } else {
         $invoice_id = wp_insert_post( apply_filters( 'wpinv_new_invoice_data', $invoice_data ), true );
     }
 
     if ( is_wp_error( $invoice_id ) ) {
-        return $invoice_id;
-    } else {
-        if ( !$updating ) {
-            $update = array( 'ID' => $invoice_id, 'post_title' => wp_sprintf( __( 'WPINV-%d', 'invoicing' ), $invoice_id ), 'post_name' => sanitize_title( wp_sprintf( __( 'WPINV-%d', 'invoicing' ), $invoice_id ) ) );
-            wp_update_post( $update );
-            
-            update_post_meta( $invoice_id, '_wpinv_number', wp_sprintf( __( 'WPINV-%d', 'invoicing' ), $invoice_id ) );
-        }
+        return $wp_error ? $invoice_id : 0;
     }
+    
+    $invoice = wpinv_get_invoice( $invoice_id );
 
     if ( !$updating ) {
         update_post_meta( $invoice_id, '_wpinv_key', apply_filters( 'wpinv_generate_invoice_key', uniqid( 'wpinv_' ) ) );
@@ -260,17 +255,15 @@ function wpinv_create_invoice( $args = array(), $data = array() ) {
         update_post_meta( $invoice_id, '_wpinv_include_tax', get_option( 'wpinv_prices_include_tax' ) );
         update_post_meta( $invoice_id, '_wpinv_user_ip', wpinv_get_ip() );
         update_post_meta( $invoice_id, '_wpinv_user_agent', wpinv_get_user_agent() );
-        ///update_post_meta( $invoice_id, '_wpinv_user_id', 0 );
         update_post_meta( $invoice_id, '_wpinv_created_via', sanitize_text_field( $args['created_via'] ) );
+        
+        // Add invoice note
+        $invoice->add_note( wp_sprintf( __( 'Invoice is created with status %s.', 'invoicing' ), wpinv_status_nicename( $invoice->status ) ) );
     }
-
-    ///if ( is_numeric( $args['user_id'] ) ) {
-        ///update_post_meta( $invoice_id, '_wpinv_user_id', $args['user_id'] );
-    ///}
 
     update_post_meta( $invoice_id, '_wpinv_version', WPINV_VERSION );
 
-    return wpinv_get_invoice( $invoice_id );
+    return $invoice;
 }
 
 function wpinv_get_prefix() {
@@ -280,12 +273,12 @@ function wpinv_get_prefix() {
 }
 
 function wpinv_get_business_logo() {
-    $business_logo = get_option( 'logo' );
+    $business_logo = wpinv_get_option( 'logo' );
     return apply_filters( 'wpinv_get_business_logo', $business_logo );
 }
 
 function wpinv_get_business_name() {
-    $business_name = get_option('blogname');
+    $business_name = wpinv_get_option('store_name');
     return apply_filters( 'wpinv_get_business_name', $business_name );
 }
 

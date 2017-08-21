@@ -95,6 +95,9 @@ jQuery(function($) {
             $('#wpinv-notes')
                 .on('click', 'a.add_note', this.add_invoice_note)
                 .on('click', 'a.delete_note', this.delete_invoice_note);
+            if ($('ul.invoice_notes')[0]) {
+                $('ul.invoice_notes')[0].scrollTop = $('ul.invoice_notes')[0].scrollHeight;
+            }
         },
         add_invoice_note: function() {
             if (!$('textarea#add_invoice_note').val()) {
@@ -115,7 +118,8 @@ jQuery(function($) {
                 _nonce: WPInv_Admin.add_invoice_note_nonce
             };
             $.post(WPInv_Admin.ajax_url, data, function(response) {
-                $('ul.invoice_notes').prepend(response);
+                $('ul.invoice_notes').append(response);
+                $('ul.invoice_notes')[0].scrollTop = $('ul.invoice_notes')[0].scrollHeight;
                 $('#wpinv-notes').unblock();
                 $('#add_invoice_note').val('');
             });
@@ -168,7 +172,7 @@ jQuery(function($) {
     if (wpi_stat_links.is(':visible')) {
         var publish_count = jQuery('.publish', wpi_stat_links).find('.count').text();
         jQuery('.publish', wpi_stat_links).find('a').html(WPInv_Admin.status_publish + ' <span class="count">' + publish_count + '</span>');
-        var pending_count = jQuery('.pending', wpi_stat_links).find('.count').text();
+        var pending_count = jQuery('.wpi-pending', wpi_stat_links).find('.count').text();
         jQuery('.pending', wpi_stat_links).find('a').html(WPInv_Admin.status_pending + ' <span class="count">' + pending_count + '</span>');
     }
     // Update tax rate state field based on selected rate country
@@ -247,7 +251,7 @@ jQuery(function($) {
         $.post(ajaxurl, data, function(response) {
             var selected = typeof $this.data('state') !== 'undefined' ? $this.data('state') : "";
             if ('nostates' === response) {
-                var text_field = '<input type="text" required="required" value="' + selected + '" id="wpinv_state" name="wpinv_state" />';
+                var text_field = '<input type="text" value="' + selected + '" id="wpinv_state" name="wpinv_state" />';
                 $('#wpinv_state', elB).replaceWith(text_field);
             } else {
                 $('#wpinv_state', elB).replaceWith(response);
@@ -900,6 +904,13 @@ jQuery(function($) {
             });
         }
     };
+    $('.post-type-wpi_invoice form#post #titlediv [name="post_title"]').attr('readonly', true);
+    $('.post-type-wpi_item.wpi-editable-n form#post').attr('action', 'javascript:void(0)');
+    $('.post-type-wpi_item.wpi-editable-n #submitdiv #major-publishing-actions').remove();
+    $('.post-type-wpi_item.wpi-editable-n #submitdiv #misc-publishing-actions a.edit-post-status').remove();
+    $('.post-type-wpi_item .posts .wpi-editable-n').each(function(e) {
+        $('.check-column [type="checkbox"]', $(this)).attr('disabled', true);
+    });
     if (WPInv_Admin.hasPM) {
         $('.wpi-gd-package .submitdelete').on('click', function(e) {
             if ( $(this).closest('.wpi-gd-package').hasClass('wpi-inuse-pkg')) {

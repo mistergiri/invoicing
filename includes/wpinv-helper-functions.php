@@ -41,10 +41,13 @@ function wpinv_get_user_agent() {
     return apply_filters( 'wpinv_get_user_agent', $user_agent );
 }
 
-function wpinv_sanitize_amount( $amount ) {
+function wpinv_sanitize_amount( $amount, $decimals = NULL ) {
     $is_negative   = false;
-    $thousands_sep = wpinv_thousands_seperator();
-    $decimal_sep   = wpinv_decimal_seperator();
+    $thousands_sep = wpinv_thousands_separator();
+    $decimal_sep   = wpinv_decimal_separator();
+    if ( $decimals === NULL ) {
+        $decimals = wpinv_decimals();
+    }
 
     // Sanitize the amount
     if ( $decimal_sep == ',' && false !== ( $found = strpos( $amount, $decimal_sep ) ) ) {
@@ -65,26 +68,39 @@ function wpinv_sanitize_amount( $amount ) {
 
     $amount   = preg_replace( '/[^0-9\.]/', '', $amount );
 
-    $decimals = apply_filters( 'wpinv_sanitize_amount_decimals', 2, $amount );
-    $amount   = number_format( (double) $amount, $decimals, '.', '' );
+    $decimals = apply_filters( 'wpinv_sanitize_amount_decimals', absint( $decimals ), $amount );
+    $amount   = number_format( (double) $amount, absint( $decimals ), '.', '' );
 
     if( $is_negative ) {
         $amount *= -1;
     }
 
-    return apply_filters( 'wpinv_sanitize_amount', $amount );
+    return apply_filters( 'wpinv_sanitize_amount', $amount, $decimals );
+}
+add_filter( 'wpinv_sanitize_amount_decimals', 'wpinv_currency_decimal_filter', 10, 1 );
+
+function wpinv_round_amount( $amount, $decimals = NULL ) {
+    if ( $decimals === NULL ) {
+        $decimals = wpinv_decimals();
+    }
+    
+    $amount = round( (double)$amount, wpinv_currency_decimal_filter( absint( $decimals ) ) );
+
+    return apply_filters( 'wpinv_round_amount', $amount, $decimals );
 }
 
 function wpinv_get_invoice_statuses( $trashed = false ) {
+    global $post;
+    $invoice_statuses = array();
     $invoice_statuses = array(
-        'pending'       => __( 'Pending Payment', 'invoicing' ),
-        'publish'       => __( 'Paid', 'invoicing' ),
-        'processing'    => __( 'Processing', 'invoicing' ),
-        'onhold'        => __( 'On Hold', 'invoicing' ),
-        'refunded'      => __( 'Refunded', 'invoicing' ),
-        'cancelled'     => __( 'Cancelled', 'invoicing' ),
-        'failed'        => __( 'Failed', 'invoicing' ),
-        'renewal'       => __( 'Renewal Payment', 'invoicing' )
+        'wpi-pending' => __('Pending Payment', 'invoicing'),
+        'publish' => __('Paid', 'invoicing'),
+        'wpi-processing' => __('Processing', 'invoicing'),
+        'wpi-onhold' => __('On Hold', 'invoicing'),
+        'wpi-refunded' => __('Refunded', 'invoicing'),
+        'wpi-cancelled' => __('Cancelled', 'invoicing'),
+        'wpi-failed' => __('Failed', 'invoicing'),
+        'wpi-renewal' => __('Renewal Payment', 'invoicing')
     );
     
     if ( $trashed ) {
@@ -177,22 +193,22 @@ function wpinv_currency_position() {
     return apply_filters( 'wpinv_currency_position', $position );
 }
 
-function wpinv_thousands_seperator() {
-    $thousand_sep = wpinv_get_option( 'thousands_seperator', ',' );
+function wpinv_thousands_separator() {
+    $thousand_sep = wpinv_get_option( 'thousands_separator', ',' );
     
-    return apply_filters( 'wpinv_thousands_seperator', $thousand_sep );
+    return apply_filters( 'wpinv_thousands_separator', $thousand_sep );
 }
 
-function wpinv_decimal_seperator() {
-    $decimal_sep = wpinv_get_option( 'decimal_seperator', '.' );
+function wpinv_decimal_separator() {
+    $decimal_sep = wpinv_get_option( 'decimal_separator', '.' );
     
-    return apply_filters( 'wpinv_decimal_seperator', $decimal_sep );
+    return apply_filters( 'wpinv_decimal_separator', $decimal_sep );
 }
 
 function wpinv_decimals() {
-    $decimals = wpinv_get_option( 'decimals', 2 );
+    $decimals = apply_filters( 'wpinv_decimals', wpinv_get_option( 'decimals', 2 ) );
     
-    return apply_filters( 'wpinv_decimals', $decimals );
+    return absint( $decimals );
 }
 
 function wpinv_get_currencies() {
@@ -203,28 +219,33 @@ function wpinv_get_currencies() {
         'AUD'  => __( 'Australian Dollars (&#36;)', 'invoicing' ),
         'BRL'  => __( 'Brazilian Real (R&#36;)', 'invoicing' ),
         'CAD'  => __( 'Canadian Dollars (&#36;)', 'invoicing' ),
-        'CZK'  => __( 'Czech Koruna', 'invoicing' ),
-        'DKK'  => __( 'Danish Krone', 'invoicing' ),
+        'CLP'  => __( 'Chilean Peso (&#36;)', 'invoicing' ),
+        'CNY'  => __( 'Chinese Yuan (&yen;)', 'invoicing' ),
+        'CZK'  => __( 'Czech Koruna (&#75;&#269;)', 'invoicing' ),
+        'DKK'  => __( 'Danish Krone (DKK)', 'invoicing' ),
         'HKD'  => __( 'Hong Kong Dollar (&#36;)', 'invoicing' ),
-        'HUF'  => __( 'Hungarian Forint', 'invoicing' ),
+        'HUF'  => __( 'Hungarian Forint (&#70;&#116;)', 'invoicing' ),
+        'INR'  => __( 'Indian Rupee (&#8377;)', 'invoicing' ),
         'ILS'  => __( 'Israeli Shekel (&#8362;)', 'invoicing' ),
         'JPY'  => __( 'Japanese Yen (&yen;)', 'invoicing' ),
-        'MYR'  => __( 'Malaysian Ringgits', 'invoicing' ),
+        'MYR'  => __( 'Malaysian Ringgit (&#82;&#77;)', 'invoicing' ),
         'MXN'  => __( 'Mexican Peso (&#36;)', 'invoicing' ),
         'NZD'  => __( 'New Zealand Dollar (&#36;)', 'invoicing' ),
-        'NOK'  => __( 'Norwegian Krone', 'invoicing' ),
-        'PHP'  => __( 'Philippine Pesos', 'invoicing' ),
-        'PLN'  => __( 'Polish Zloty', 'invoicing' ),
+        'NOK'  => __( 'Norwegian Krone (&#107;&#114;)', 'invoicing' ),
+        'PHP'  => __( 'Philippine Peso (&#8369;)', 'invoicing' ),
+        'PLN'  => __( 'Polish Zloty (&#122;&#322;)', 'invoicing' ),
         'SGD'  => __( 'Singapore Dollar (&#36;)', 'invoicing' ),
-        'SEK'  => __( 'Swedish Krona', 'invoicing' ),
-        'CHF'  => __( 'Swiss Franc', 'invoicing' ),
-        'TWD'  => __( 'Taiwan New Dollars', 'invoicing' ),
+        'SEK'  => __( 'Swedish Krona (&#107;&#114;)', 'invoicing' ),
+        'CHF'  => __( 'Swiss Franc (&#67;&#72;&#70;)', 'invoicing' ),
+        'TWD'  => __( 'Taiwan New Dollar (&#78;&#84;&#36;)', 'invoicing' ),
         'THB'  => __( 'Thai Baht (&#3647;)', 'invoicing' ),
-        'INR'  => __( 'Indian Rupee (&#8377;)', 'invoicing' ),
         'TRY'  => __( 'Turkish Lira (&#8378;)', 'invoicing' ),
         'RIAL' => __( 'Iranian Rial (&#65020;)', 'invoicing' ),
-        'RUB'  => __( 'Russian Rubles', 'invoicing' )
+        'RUB'  => __( 'Russian Ruble (&#8381;)', 'invoicing' ),
+        'ZAR'  => __( 'South African Rand (&#82;)', 'invoicing' )
     );
+    
+    asort( $currencies );
 
     return apply_filters( 'wpinv_currencies', $currencies );
 }
@@ -295,8 +316,8 @@ function wpinv_price( $amount = '', $currency = '' ) {
 }
 
 function wpinv_format_amount( $amount, $decimals = NULL, $calculate = false ) {
-    $thousands_sep = wpinv_thousands_seperator();
-    $decimal_sep   = wpinv_decimal_seperator();
+    $thousands_sep = wpinv_thousands_separator();
+    $decimal_sep   = wpinv_decimal_separator();
 
     if ( $decimals === NULL ) {
         $decimals = wpinv_decimals();
@@ -335,6 +356,7 @@ function wpinv_format_amount( $amount, $decimals = NULL, $calculate = false ) {
 
     return apply_filters( 'wpinv_amount_format', $formatted, $amount, $decimals, $decimal_sep, $thousands_sep, $calculate );
 }
+add_filter( 'wpinv_amount_format_decimals', 'wpinv_currency_decimal_filter', 10, 1 );
 
 function wpinv_sanitize_key( $key ) {
     $raw_key = $key;
@@ -507,4 +529,178 @@ function wpinv_format_hex( $hex ) {
     }
 
     return $hex ? '#' . $hex : null;
+}
+
+/**
+ * Get truncated string with specified width.
+ *
+ * @since 1.0.0
+ *
+ * @param string $str The string being decoded.
+ * @param int $start The start position offset. Number of characters from the beginning of string.
+ *                      For negative value, number of characters from the end of the string.
+ * @param int $width The width of the desired trim. Negative widths count from the end of the string.
+ * @param string $trimmaker A string that is added to the end of string when string is truncated. Ex: "...".
+ * @param string $encoding The encoding parameter is the character encoding. Default "UTF-8".
+ * @return string
+ */
+function wpinv_utf8_strimwidth( $str, $start, $width, $trimmaker = '', $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_strimwidth' ) ) {
+        return mb_strimwidth( $str, $start, $width, $trimmaker, $encoding );
+    }
+    
+    return wpinv_utf8_substr( $str, $start, $width, $encoding ) . $trimmaker;
+}
+
+/**
+ * Get the string length.
+ *
+ * @since 1.0.0
+ *
+ * @param string $str The string being checked for length. 
+ * @param string $encoding The encoding parameter is the character encoding. Default "UTF-8".
+ * @return int Returns the number of characters in string.
+ */
+function wpinv_utf8_strlen( $str, $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_strlen' ) ) {
+        return mb_strlen( $str, $encoding );
+    }
+        
+    return strlen( $str );
+}
+
+function wpinv_utf8_strtolower( $str, $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_strtolower' ) ) {
+        return mb_strtolower( $str, $encoding );
+    }
+    
+    return strtolower( $str );
+}
+
+function wpinv_utf8_strtoupper( $str, $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_strtoupper' ) ) {
+        return mb_strtoupper( $str, $encoding );
+    }
+    
+    return strtoupper( $str );
+}
+
+/**
+ * Find position of first occurrence of string in a string
+ *
+ * @since 1.0.0
+ *
+ * @param string $str The string being checked.
+ * @param string $find The string to find in input string.
+ * @param int $offset The search offset. Default "0". A negative offset counts from the end of the string.
+ * @param string $encoding The encoding parameter is the character encoding. Default "UTF-8".
+ * @return int Returns the position of the first occurrence of search in the string.
+ */
+function wpinv_utf8_strpos( $str, $find, $offset = 0, $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_strpos' ) ) {
+        return mb_strpos( $str, $find, $offset, $encoding );
+    }
+        
+    return strpos( $str, $find, $offset );
+}
+
+/**
+ * Find position of last occurrence of a string in a string.
+ *
+ * @since 1.0.0
+ *
+ * @param string $str The string being checked, for the last occurrence of search.
+ * @param string $find The string to find in input string.
+ * @param int $offset Specifies begin searching an arbitrary number of characters into the string.
+ * @param string $encoding The encoding parameter is the character encoding. Default "UTF-8".
+ * @return int Returns the position of the last occurrence of search.
+ */
+function wpinv_utf8_strrpos( $str, $find, $offset = 0, $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_strrpos' ) ) {
+        return mb_strrpos( $str, $find, $offset, $encoding );
+    }
+        
+    return strrpos( $str, $find, $offset );
+}
+
+/**
+ * Get the part of string.
+ *
+ * @since 1.0.0
+ *
+ * @param string $str The string to extract the substring from.
+ * @param int $start If start is non-negative, the returned string will start at the entered position in string, counting from zero.
+ *                      If start is negative, the returned string will start at the entered position from the end of string. 
+ * @param int|null $length Maximum number of characters to use from string.
+ * @param string $encoding The encoding parameter is the character encoding. Default "UTF-8".
+ * @return string
+ */
+function wpinv_utf8_substr( $str, $start, $length = null, $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_substr' ) ) {
+        if ( $length === null ) {
+            return mb_substr( $str, $start, wpinv_utf8_strlen( $str, $encoding ), $encoding );
+        } else {
+            return mb_substr( $str, $start, $length, $encoding );
+        }
+    }
+        
+    return substr( $str, $start, $length );
+}
+
+/**
+ * Get the width of string.
+ *
+ * @since 1.0.0
+ *
+ * @param string $str The string being decoded.
+ * @param string $encoding The encoding parameter is the character encoding. Default "UTF-8".
+ * @return string The width of string.
+ */
+function wpinv_utf8_strwidth( $str, $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_strwidth' ) ) {
+        return mb_strwidth( $str, $encoding );
+    }
+    
+    return wpinv_utf8_strlen( $str, $encoding );
+}
+
+function wpinv_utf8_ucfirst( $str, $lower_str_end = false, $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_strlen' ) ) {
+        $first_letter = wpinv_utf8_strtoupper( wpinv_utf8_substr( $str, 0, 1, $encoding ), $encoding );
+        $str_end = "";
+        
+        if ( $lower_str_end ) {
+            $str_end = wpinv_utf8_strtolower( wpinv_utf8_substr( $str, 1, wpinv_utf8_strlen( $str, $encoding ), $encoding ), $encoding );
+        } else {
+            $str_end = wpinv_utf8_substr( $str, 1, wpinv_utf8_strlen( $str, $encoding ), $encoding );
+        }
+
+        return $first_letter . $str_end;
+    }
+    
+    return ucfirst( $str );
+}
+
+function wpinv_utf8_ucwords( $str, $encoding = 'UTF-8' ) {
+    if ( function_exists( 'mb_convert_case' ) ) {
+        return mb_convert_case( $str, MB_CASE_TITLE, $encoding );
+    }
+    
+    return ucwords( $str );
+}
+
+function wpinv_period_in_days( $period, $unit ) {
+    $period = absint( $period );
+    
+    if ( $period > 0 ) {
+        if ( in_array( strtolower( $unit ), array( 'w', 'week', 'weeks' ) ) ) {
+            $period = $period * 7;
+        } else if ( in_array( strtolower( $unit ), array( 'm', 'month', 'months' ) ) ) {
+            $period = $period * 30;
+        } else if ( in_array( strtolower( $unit ), array( 'y', 'year', 'years' ) ) ) {
+            $period = $period * 365;
+        }
+    }
+    
+    return $period;
 }

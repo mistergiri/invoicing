@@ -48,7 +48,7 @@ function wpinv_save_meta_boxes( $post_id, $post, $update = false ) {
         return;
     }
         
-    if ( $post->post_type == 'wpi_invoice' ) {
+    if ( $post->post_type == 'wpi_invoice' or $post->post_type == 'wpi_quote' ) {
         if ( ( defined( 'DOING_AJAX') && DOING_AJAX ) || isset( $_REQUEST['bulk_edit'] ) ) {
             return;
         }
@@ -68,6 +68,17 @@ function wpinv_save_meta_boxes( $post_id, $post, $update = false ) {
             $fields['_wpinv_recurring_period']   = 'wpinv_recurring_period';
             $fields['_wpinv_recurring_interval'] = 'wpinv_recurring_interval';
             $fields['_wpinv_recurring_limit']    = 'wpinv_recurring_limit';
+            $fields['_wpinv_free_trial']         = 'wpinv_free_trial';
+            $fields['_wpinv_trial_period']       = 'wpinv_trial_period';
+            $fields['_wpinv_trial_interval']     = 'wpinv_trial_interval';
+            
+            if ( !isset( $_POST['wpinv_is_recurring'] ) ) {
+                $_POST['wpinv_is_recurring'] = 0;
+            }
+            
+            if ( !isset( $_POST['wpinv_free_trial'] ) || empty( $_POST['wpinv_is_recurring'] ) ) {
+                $_POST['wpinv_free_trial'] = 0;
+            }
             
             foreach ( $fields as $field => $name ) {
                 if ( isset( $_POST[ $name ] ) ) {
@@ -85,50 +96,14 @@ function wpinv_save_meta_boxes( $post_id, $post, $update = false ) {
                     update_post_meta( $post_id, $field, $value );
                 }
             }
+            
+            if ( !get_post_meta( $post_id, '_wpinv_custom_id', true ) ) {
+                update_post_meta( $post_id, '_wpinv_custom_id', $post_id );
+            }
         }
     }
 }
 add_action( 'save_post', 'wpinv_save_meta_boxes', 10, 3 );
-
-function wpinv_bulk_and_quick_edit_save( $post_id, $post, $update = false ) {
-    if ( !( !empty( $_POST['action'] ) && $_POST['action'] == 'inline-save' ) ) {
-        return;
-    }
-    
-    // $post_id and $post are required
-    if ( empty( $post_id ) || empty( $post ) ) {
-        return;
-    }
-        
-    if ( !current_user_can( 'edit_post', $post_id ) || empty( $post->post_type ) ) {
-        return;
-    }
-    
-    // Dont' save meta boxes for revisions or autosaves
-    if ( defined( 'DOING_AUTOSAVE' ) || is_int( wp_is_post_revision( $post ) ) || is_int( wp_is_post_autosave( $post ) ) ) {
-        return;
-    }
-
-    if ( $post->post_type == 'wpi_item' ) {
-        // verify nonce
-        if ( isset( $_POST['_wpinv_item_price'] ) && get_post_meta( $post->ID, '_wpinv_type', true ) !== 'package' ) {
-            update_post_meta( $post_id, '_wpinv_price', wpinv_sanitize_amount( $_POST['_wpinv_item_price'] ) );
-        }
-        
-        if ( isset( $_POST['_wpinv_vat_class'] ) ) {
-            update_post_meta( $post_id, '_wpinv_vat_class', sanitize_text_field( $_POST['_wpinv_vat_class'] ) );
-        }
-
-        if ( isset( $_POST['_wpinv_vat_rules'] ) ) {
-            update_post_meta( $post_id, '_wpinv_vat_rule', sanitize_text_field( $_POST['_wpinv_vat_rules'] ) );
-        }
-        
-        if ( isset( $_POST['_wpinv_item_type'] ) ) {
-            update_post_meta( $post_id, '_wpinv_type', sanitize_text_field( $_POST['_wpinv_item_type'] ) );
-        }
-    }
-}
-add_action( 'save_post', 'wpinv_bulk_and_quick_edit_save', 10, 3 );
 
 function wpinv_register_item_meta_boxes() {    
     global $wpinv_euvat;
@@ -144,6 +119,7 @@ function wpinv_register_item_meta_boxes() {
     }
     
     add_meta_box( 'wpinv_field_item_info', __( 'Item info', 'invoicing' ), 'WPInv_Meta_Box_Items::item_info', 'wpi_item', 'side', 'core' );
+    add_meta_box( 'wpinv_field_meta_values', __( 'Item Meta Values', 'invoicing' ), 'WPInv_Meta_Box_Items::meta_values', 'wpi_item', 'side', 'core' );
 }
 
 function wpinv_register_discount_meta_boxes() {
@@ -250,7 +226,7 @@ function wpinv_discount_metabox_details( $post ) {
         <?php do_action( 'wpinv_discount_form_before_start', $post ); ?>
         <tr>
             <th valign="top" scope="row">
-                <label for="wpinv_discount_start"><?php _e( 'Start date', 'invoicing' ); ?></label>
+                <label for="wpinv_discount_start"><?php _e( 'Start Date', 'invoicing' ); ?></label>
             </th>
             <td>
                 <input type="text" class="medium-text wpiDatepicker" id="wpinv_discount_start" data-dateFormat="yy-mm-dd" name="start" value="<?php echo esc_attr( wpinv_get_discount_start_date( $discount_id ) ); ?>">
@@ -260,7 +236,7 @@ function wpinv_discount_metabox_details( $post ) {
         <?php do_action( 'wpinv_discount_form_before_expiration', $post ); ?>
         <tr>
             <th valign="top" scope="row">
-                <label for="wpinv_discount_expiration"><?php _e( 'Expiration date', 'invoicing' ); ?></label>
+                <label for="wpinv_discount_expiration"><?php _e( 'Expiration Date', 'invoicing' ); ?></label>
             </th>
             <td>
                 <input type="text" class="medium-text wpiDatepicker" id="wpinv_discount_expiration" data-dateFormat="yy-mm-dd" name="expiration" value="<?php echo esc_attr( wpinv_get_discount_expiration( $discount_id ) ); ?>">
@@ -297,7 +273,7 @@ function wpinv_discount_metabox_details( $post ) {
                     <option value="0" <?php selected( false, $recurring ); ?>><?php _e( 'All payments', 'invoicing' ); ?></option>
                     <option value="1" <?php selected( true, $recurring ); ?>><?php _e( 'First payment only', 'invoicing' ); ?></option>
                 </select>
-                <p class="description"><?php _e( '<b>All payments:</b> apply this discount to all recurring payments of the recurring invoice. <br><b>First payment only:</b> apply this discount to only first payment of the recurring invoice.', 'invoicing' ); ?></p>
+                <p class="description"><?php _e( '<b>All payments:</b> Apply this discount to all recurring payments of the recurring invoice. <br><b>First payment only:</b> Apply this discount to only first payment of the recurring invoice.', 'invoicing' ); ?></p>
             </td>
         </tr>
         <?php do_action( 'wpinv_discount_form_before_max_uses', $post ); ?>

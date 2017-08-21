@@ -2,66 +2,72 @@
 // Exit if accessed directly
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-function wpinv_get_item_by( $field = '', $value = '' ) {
+function wpinv_get_item_by( $field = '', $value = '', $type = '' ) {
     if( empty( $field ) || empty( $value ) ) {
         return false;
     }
+    
+    $posts = array();
 
     switch( strtolower( $field ) ) {
         case 'id':
-            $item = get_post( $value );
+            $item = new WPInv_Item( $value );
 
-            if( get_post_type( $item ) != 'wpi_item' ) {
-                return false;
+            if ( !empty( $item ) && $item->post_type == 'wpi_item' ) {
+                return $item;
             }
+            return false;
 
             break;
 
         case 'slug':
         case 'name':
-            $item = get_posts( array(
+            $posts = get_posts( array(
                 'post_type'      => 'wpi_item',
                 'name'           => $value,
                 'posts_per_page' => 1,
                 'post_status'    => 'any'
             ) );
 
-            if ( $item ) {
-                $item = $item[0];
-            }
-
             break;
-        case 'package_id':
-            $item = get_posts( array(
+        case 'custom_id':
+            if ( empty( $value ) || empty( $type ) ) {
+                return false;
+            }
+            
+            $meta_query = array();
+            $meta_query[] = array(
+                'key'   => '_wpinv_type',
+                'value' => $type,
+            );
+            $meta_query[] = array(
+                'key'   => '_wpinv_custom_id',
+                'value' => $value,
+            );
+            
+            $args = array(
                 'post_type'      => 'wpi_item',
                 'posts_per_page' => 1,
                 'post_status'    => 'any',
                 'orderby'        => 'ID',
                 'order'          => 'ASC',
-                'meta_query'     => array(
-                    array(
-                        'key'   => '_wpinv_' . $field,
-                        'value' => $value,
-                    ),
-                    array(
-                        'key'   => '_wpinv_type',
-                        'value' => 'package',
-                    )
-                )
-            ) );
-
-            if ( $item ) {
-                $item = $item[0];
-            }
+                'meta_query'     => array( $meta_query )
+            );
+            
+            $posts = get_posts( $args );
 
             break;
 
         default:
             return false;
     }
+    
+    if ( !empty( $posts[0] ) ) {
+        $item = new WPInv_Item( $posts[0]->ID );
 
-    if ( $item ) {
-        return new WPInv_Item( $item->ID );
+        if ( !empty( $item ) && $item->post_type == 'wpi_item' ) {
+            return $item;
+        }
     }
 
     return false;
@@ -98,6 +104,20 @@ function wpinv_is_free_item( $item_id = 0 ) {
     $item = new WPInv_Item( $item_id );
     
     return $item->is_free();
+}
+
+function wpinv_item_is_editable( $item = 0 ) {
+    if ( !empty( $item ) && is_a( $item, 'WP_Post' ) ) {
+        $item = $item->ID;
+    }
+        
+    if ( empty( $item ) ) {
+        return true;
+    }
+
+    $item = new WPInv_Item( $item );
+    
+    return (bool) $item->is_editable();
 }
 
 function wpinv_get_item_price( $item_id = 0 ) {
@@ -161,14 +181,14 @@ function wpinv_get_item_final_price( $item_id = 0, $amount_override = null ) {
     return apply_filters( 'wpinv_get_item_final_price', $price, $item_id );
 }
 
-function wpinv_item_cpt_singular_name( $item_id ) {
+function wpinv_item_custom_singular_name( $item_id ) {
     if( empty( $item_id ) ) {
         return false;
     }
 
     $item = new WPInv_Item( $item_id );
     
-    return $item->get_cpt_singular_name();
+    return $item->get_custom_singular_name();
 }
 
 function wpinv_get_item_types() {
@@ -270,19 +290,13 @@ function wpinv_get_item_token( $url = '' ) {
     $hash    = apply_filters( 'wpinv_get_url_token_algorithm', 'sha256' );
     $secret  = apply_filters( 'wpinv_get_url_token_secret', hash( $hash, wp_salt() ) );
 
-    /*
-     * Add additional args to the URL for generating the token.
-     * Allows for restricting access to IP and/or user agent.
-     */
     $parts   = parse_url( $url );
     $options = array();
 
     if ( isset( $parts['query'] ) ) {
         wp_parse_str( $parts['query'], $query_args );
 
-        // o = option checks (ip, user agent).
         if ( ! empty( $query_args['o'] ) ) {
-            // Multiple options can be checked by separating them with a colon in the query parameter.
             $options = explode( ':', rawurldecode( $query_args['o'] ) );
 
             if ( in_array( 'ip', $options ) ) {
@@ -296,19 +310,14 @@ function wpinv_get_item_token( $url = '' ) {
         }
     }
 
-    /*
-     * Filter to modify arguments and allow custom options to be tested.
-     * Be sure to rawurlencode any custom options for consistent results.
-     */
     $args = apply_filters( 'wpinv_get_url_token_args', $args, $url, $options );
 
     $args['secret'] = $secret;
-    $args['token']  = false; // Removes a token if present.
+    $args['token']  = false;
 
     $url   = add_query_arg( $args, $url );
     $parts = parse_url( $url );
 
-    // In the event there isn't a path, set an empty one so we can MD5 the token
     if ( ! isset( $parts['path'] ) ) {
         $parts['path'] = '';
     }
@@ -325,14 +334,12 @@ function wpinv_validate_url_token( $url = '' ) {
     if ( isset( $parts['query'] ) ) {
         wp_parse_str( $parts['query'], $query_args );
 
-        // These are the only URL parameters that are allowed to affect the token validation
         $allowed = apply_filters( 'wpinv_url_token_allowed_params', array(
             'item',
             'ttl',
             'token'
         ) );
 
-        // Parameters that will be removed from the URL before testing the token
         $remove = array();
 
         foreach( $query_args as $key => $value ) {
@@ -390,7 +397,7 @@ function wpinv_get_cart_item_tax( $item_id = 0, $subtotal = '', $options = array
 function wpinv_cart_item_price( $item ) {
     $use_taxes  = wpinv_use_taxes();
     $item_id    = isset( $item['id'] ) ? $item['id'] : 0;
-    $price      = isset( $item['item_price'] ) ? wpinv_format_amount( $item['item_price'] ) : 0;
+    $price      = isset( $item['item_price'] ) ? wpinv_round_amount( $item['item_price'] ) : 0;
     $options    = isset( $item['options'] ) ? $item['options'] : array();
     $price_id   = isset( $options['price_id'] ) ? $options['price_id'] : false;
     $tax        = wpinv_price( wpinv_format_amount( $item['tax'] ) );
@@ -424,7 +431,7 @@ function wpinv_cart_item_tax( $item ) {
     if ( isset( $item['tax'] ) && $item['tax'] > 0 && $item['subtotal'] > 0 ) {
         $tax      = wpinv_price( wpinv_format_amount( $item['tax'] ) );
         $tax_rate = !empty( $item['vat_rate'] ) ? $item['vat_rate'] : ( $item['tax'] / $item['subtotal'] ) * 100;
-        $tax_rate = $tax_rate > 0 ? (float)wpinv_format_amount( $tax_rate, 2 ) : '';
+        $tax_rate = $tax_rate > 0 ? (float)wpinv_round_amount( $tax_rate, 4 ) : '';
         $tax_rate = $tax_rate != '' ? ' <small class="tax-rate normal small">(' . $tax_rate . '%)</small>' : '';
     }
     
@@ -437,32 +444,38 @@ function wpinv_cart_item_tax( $item ) {
     return apply_filters( 'wpinv_cart_item_tax_label', $tax, $item );
 }
 
-function wpinv_get_cart_item_price( $item_id = 0, $options = array(), $remove_tax_from_inclusive = false ) {
+function wpinv_get_cart_item_price( $item_id = 0, $cart_item = array(), $options = array(), $remove_tax_from_inclusive = false ) {
     $price = 0;
-    $variable_prices = wpinv_has_variable_prices( $item_id );
+    
+    // Set custom price
+    if ( isset( $cart_item['custom_price'] ) && $cart_item['custom_price'] !== '' ) {
+        $price = $cart_item['custom_price'];
+    } else {
+        $variable_prices = wpinv_has_variable_prices( $item_id );
 
-    if ( $variable_prices ) {
-        $prices = wpinv_get_variable_prices( $item_id );
+        if ( $variable_prices ) {
+            $prices = wpinv_get_variable_prices( $item_id );
 
-        if ( $prices ) {
-            if( ! empty( $options ) ) {
-                $price = isset( $prices[ $options['price_id'] ] ) ? $prices[ $options['price_id'] ]['amount'] : false;
-            } else {
-                $price = false;
+            if ( $prices ) {
+                if( ! empty( $options ) ) {
+                    $price = isset( $prices[ $options['price_id'] ] ) ? $prices[ $options['price_id'] ]['amount'] : false;
+                } else {
+                    $price = false;
+                }
             }
         }
-    }
 
-    if( ! $variable_prices || false === $price ) {
-        // Get the standard Item price if not using variable prices
-        $price = wpinv_get_item_price( $item_id );
+        if( ! $variable_prices || false === $price ) {
+            // Get the standard Item price if not using variable prices
+            $price = wpinv_get_item_price( $item_id );
+        }
     }
 
     if ( $remove_tax_from_inclusive && wpinv_prices_include_tax() ) {
         $price -= wpinv_get_cart_item_tax( $item_id, $price, $options );
     }
 
-    return apply_filters( 'wpinv_cart_item_price', $price, $item_id, $options );
+    return apply_filters( 'wpinv_cart_item_price', $price, $item_id, $cart_item, $options, $remove_tax_from_inclusive );
 }
 
 function wpinv_get_cart_item_price_id( $item = array() ) {
@@ -643,4 +656,171 @@ function wpinv_item_in_use( $item_id ) {
     $wpi_items_in_use[$item_id] = $in_use;
     
     return $in_use;
+}
+
+function wpinv_create_item( $args = array(), $wp_error = false, $force_update = false ) {
+    // Set some defaults
+    $defaults = array(
+        'type'                 => 'custom',                                                // Optional. Item type. Default 'custom'.
+        'title'                => '',                                                      // Required. Item title.
+        'custom_id'            => 0,                                                       // Optional. Any integer or non numeric id. Must be unique within item type.
+        'price'                => '0.00',                                                  // Optional. Item price. Default '0.00'.
+        'status'               => 'pending',                                               // Optional. pending, publish
+        'custom_name'          => '',                                                      // Optional. Plural sub title for item.
+        'custom_singular_name' => '',                                                      // Optional. Singular sub title for item.
+        'vat_rule'             => 'digital',                                               // Optional. digital => Digital item, physical => Physical item
+        'editable'             => true,                                                    // Optional. Item editable from Items list page? Default true.
+        'excerpt'              => '',                                                      // Optional. Item short description
+        /* Recurring item fields */
+        'is_recurring'         => 0,                                                       // Optional. 1 => Allow recurring or 0 => Don't allow recurring
+        'recurring_period'     => 'M',                                                     // Optional. D => Daily, W => Weekly, M => Monthly, Y => Yearly
+        'recurring_interval'   => 0,                                                       // Optional. Integer value between 1 - 90.
+        'recurring_limit'      => 0,                                                       // Optional. Any integer number. 0 for recurring forever until cancelled.
+        'free_trial'           => 0,                                                       // Optional. 1 => Allow free trial or 0 => Don't free trial
+        'trial_period'         => 'M',                                                     // Optional. D => Daily, W => Weekly, M => Monthly, Y => Yearly
+        'trial_interval'       => 0,                                                       // Optional. Any integer number.
+    );
+
+    $data = wp_parse_args( $args, $defaults );
+
+    if ( empty( $data['type'] ) ) {
+        $data['type'] = 'custom';
+    }
+
+    if ( !empty( $data['custom_id'] ) ) {
+        $item = wpinv_get_item_by( 'custom_id', $data['custom_id'], $data['type'] );
+    } else {
+        $item = NULL;
+    }
+
+    if ( !empty( $item ) ) {
+        if ( $force_update ) {
+            if ( empty( $args['ID'] ) ) {
+                $args['ID'] = $item->ID;
+            }
+            return wpinv_update_item( $args, $wp_error );
+        }
+
+        return $item;
+    }
+
+    $meta                           = array();
+    $meta['type']                   = $data['type'];
+    $meta['custom_id']              = $data['custom_id'];
+    $meta['custom_singular_name']   = $data['custom_singular_name'];
+    $meta['custom_name']            = $data['custom_name'];
+    $meta['price']                  = wpinv_round_amount( $data['price'] );
+    $meta['editable']               = (int)$data['editable'];
+    $meta['vat_rule']               = $data['vat_rule'];
+    $meta['vat_class']              = '_standard';
+    
+    if ( !empty( $data['is_recurring'] ) ) {
+        $meta['is_recurring']       = $data['is_recurring'];
+        $meta['recurring_period']   = $data['recurring_period'];
+        $meta['recurring_interval'] = absint( $data['recurring_interval'] );
+        $meta['recurring_limit']    = absint( $data['recurring_limit'] );
+        $meta['free_trial']         = $data['free_trial'];
+        $meta['trial_period']       = $data['trial_period'];
+        $meta['trial_interval']     = absint( $data['trial_interval'] );
+    } else {
+        $meta['is_recurring']       = 0;
+        $meta['recurring_period']   = '';
+        $meta['recurring_interval'] = '';
+        $meta['recurring_limit']    = '';
+        $meta['free_trial']         = 0;
+        $meta['trial_period']       = '';
+        $meta['trial_interval']     = '';
+    }
+    
+    $post_data  = array( 
+        'post_title'    => $data['title'],
+        'post_excerpt'  => $data['excerpt'],
+        'post_status'   => $data['status'],
+        'meta'          => $meta
+    );
+
+    $item = new WPInv_Item();
+    $return = $item->create( $post_data, $wp_error );
+
+    if ( $return && !empty( $item ) && !is_wp_error( $return ) ) {
+        return $item;
+    }
+
+    if ( $wp_error && is_wp_error( $return ) ) {
+        return $return;
+    }
+    return 0;
+}
+
+function wpinv_update_item( $args = array(), $wp_error = false ) {
+    $item = !empty( $args['ID'] ) ? new WPInv_Item( $args['ID'] ) : NULL;
+
+    if ( empty( $item ) || !( !empty( $item->post_type ) && $item->post_type == 'wpi_item' ) ) {
+        if ( $wp_error ) {
+            return new WP_Error( 'wpinv_invalid_item', __( 'Invalid item.', 'invoicing' ) );
+        }
+        return 0;
+    }
+    
+    if ( !empty( $args['custom_id'] ) ) {
+        $item_exists = wpinv_get_item_by( 'custom_id', $args['custom_id'], ( !empty( $args['type'] ) ? $args['type'] : $item->type ) );
+        
+        if ( !empty( $item_exists ) && $item_exists->ID != $args['ID'] ) {
+            if ( $wp_error ) {
+                return new WP_Error( 'wpinv_invalid_custom_id', __( 'Item with custom id already exists.', 'invoicing' ) );
+            }
+            return 0;
+        }
+    }
+
+    $meta_fields = array( 'type', 'custom_id', 'custom_singular_name', 'custom_name', 'price', 'editable', 'vat_rule', 'vat_class', 'is_recurring', 'recurring_period', 'recurring_interval', 'recurring_limit', 'free_trial', 'trial_period', 'trial_interval' );
+
+    $post_data = array();
+    if ( isset( $args['title'] ) ) { 
+        $post_data['post_title'] = $args['title'];
+    }
+    if ( isset( $args['excerpt'] ) ) { 
+        $post_data['post_excerpt'] = $args['excerpt'];
+    }
+    if ( isset( $args['status'] ) ) { 
+        $post_data['post_status'] = $args['status'];
+    }
+    
+    foreach ( $meta_fields as $meta_field ) {
+        if ( isset( $args[ $meta_field ] ) ) { 
+            $value = $args[ $meta_field ];
+
+            switch ( $meta_field ) {
+                case 'price':
+                    $value = wpinv_round_amount( $value );
+                break;
+                case 'recurring_interval':
+                case 'recurring_limit':
+                case 'trial_interval':
+                    $value = absint( $value );
+                break;
+            }
+
+            $post_data['meta'][ $meta_field ] = $value;
+        };
+    }
+
+    if ( empty( $post_data ) ) {
+        if ( $wp_error ) {
+            return new WP_Error( 'wpinv_invalid_item_data', __( 'Invalid item data.', 'invoicing' ) );
+        }
+        return 0;
+    }
+    $post_data['ID'] = $args['ID'];
+
+    $return = $item->update( $post_data, $wp_error );
+
+    if ( $return && !empty( $item ) && !is_wp_error( $return ) ) {
+        return $item;
+    }
+
+    if ( $wp_error && is_wp_error( $return ) ) {
+        return $return;
+    }
+    return 0;
 }

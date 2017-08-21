@@ -70,7 +70,7 @@ class WPInv_Reports {
         }
         
         $current_page = admin_url( 'admin.php?page=wpinv-reports' );
-        $active_tab = isset( $_GET['tab'] ) ? $_GET['tab'] : 'export';
+        $active_tab = isset( $_GET['tab'] ) ? sanitize_text_field( $_GET['tab'] ) : 'export';
         ?>
         <div class="wrap wpi-reports-wrap">
             <h1><?php echo esc_html( __( 'Reports', 'invoicing' ) ); ?></h1>
@@ -371,7 +371,7 @@ class WPInv_Reports {
     public function set_invoices_export( $request ) {
         $this->from_date    = isset( $request['from_date'] ) ? sanitize_text_field( $request['from_date'] ) : '';
         $this->to_date      = isset( $request['to_date'] ) ? sanitize_text_field( $request['to_date'] ) : '';
-        $this->status       = isset( $request['status'] ) ? sanitize_text_field( $request['status'] ) : 'publich';
+        $this->status       = isset( $request['status'] ) ? sanitize_text_field( $request['status'] ) : 'publish';
     }
     
     public function get_invoices_columns( $columns = array() ) {
@@ -398,6 +398,7 @@ class WPInv_Reports {
             'vat_number'    => __( 'Vat Number', 'invoicing' ),
             'ip'            => __( 'IP', 'invoicing' ),
             'gateway'       => __( 'Gateway', 'invoicing' ),
+            'gateway_nicename'       => __( 'Gateway Nicename', 'invoicing' ),
             'transaction_id'=> __( 'Transaction ID', 'invoicing' ),
             'currency'      => __( 'Currency', 'invoicing' ),
             'due_date'      => __( 'Due Date', 'invoicing' ),
@@ -436,18 +437,18 @@ class WPInv_Reports {
             foreach ( $invoices as $invoice ) {
                 $row = array(
                     'id'            => $invoice->ID,
-                    'number'        => $invoice->number,
-                    'date'          => $invoice->date,
-                    'amount'        => $invoice->total > 0 ? wpinv_format_amount( $invoice->total, NULL, true ) : 0,
-                    'status_nicename' => $invoice->status_nicename,
-                    'status'        => $invoice->status,
-                    'tax'           => $invoice->tax > 0 ? wpinv_format_amount( $invoice->tax, NULL, true ) : '',
-                    'discount'      => $invoice->discount > 0 ? wpinv_format_amount( $invoice->discount, NULL, true ) : '',
-                    'user_id'       => $invoice->user_id,
-                    'email'         => $invoice->email,
-                    'first_name'    => $invoice->first_name,
-                    'last_name'     => $invoice->last_name,
-                    'address'       => $invoice->address,
+                    'number'        => $invoice->get_number(),
+                    'date'          => $invoice->get_invoice_date( false ),
+                    'amount'        => wpinv_round_amount( $invoice->get_total() ),
+                    'status_nicename' => $invoice->get_status( true ),
+                    'status'        => $invoice->get_status(),
+                    'tax'           => $invoice->get_tax() > 0 ? wpinv_round_amount( $invoice->get_tax() ) : '',
+                    'discount'      => $invoice->get_discount() > 0 ? wpinv_round_amount( $invoice->get_discount() ) : '',
+                    'user_id'       => $invoice->get_user_id(),
+                    'email'         => $invoice->get_email(),
+                    'first_name'    => $invoice->get_first_name(),
+                    'last_name'     => $invoice->get_last_name(),
+                    'address'       => $invoice->get_address(),
                     'city'          => $invoice->city,
                     'state'         => $invoice->state,
                     'country'       => $invoice->country,
@@ -455,11 +456,12 @@ class WPInv_Reports {
                     'phone'         => $invoice->phone,
                     'company'       => $invoice->company,
                     'vat_number'    => $invoice->vat_number,
-                    'ip'            => $invoice->ip,
-                    'gateway'       => $invoice->gateway,
-                    'transaction_id'=> $invoice->gateway ? $invoice->transaction_id : '',
-                    'currency'      => $invoice->currency,
-                    'due_date'      => $invoice->needs_payment() ? $invoice->due_date : '',
+                    'ip'            => $invoice->get_ip(),
+                    'gateway'       => $invoice->get_gateway(),
+                    'gateway_nicename' => $invoice->get_gateway_title(),
+                    'transaction_id'=> $invoice->gateway ? $invoice->get_transaction_id() : '',
+                    'currency'      => $invoice->get_currency(),
+                    'due_date'      => $invoice->needs_payment() ? $invoice->get_due_date() : '',
                 );
                 
                 $data[] = apply_filters( 'wpinv_export_invoice_row', $row, $invoice );

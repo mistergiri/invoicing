@@ -57,7 +57,7 @@ jQuery(function($) {
                 if (eu_state && WPInv_VAT_Vars.disableVATSameCountry && wpinv_is_base_country(data.post.country)) {
                     eu_state = false;
                 }
-                if (eu_state) {
+                if (eu_state && !WPInv_VAT_Vars.HideVatFields) {
                     $('#wpi_vat_info').show();
                     $('#wpi_vat_info').parent('.wpi-vat-details').show();
                 } else {
@@ -484,8 +484,10 @@ jQuery(function($) {
             if (tax !== "0" && countryEl === undefined) {
                 window.location.reload()
             }
-            $('#wpi_vat_info').parent('.wpi-vat-details').show();
-            $('#wpi_vat_info').show();
+            if (!WPInv_VAT_Vars.HideVatFields) {
+                $('#wpi_vat_info').parent('.wpi-vat-details').show();
+                $('#wpi_vat_info').show();
+            }
             if (!updateTaxes) {
                 return;
             }
@@ -577,6 +579,9 @@ jQuery(function($) {
 });
 
 function wpinv_recalculate_taxes(state) {
+    if (!WPInv_VAT_Vars.UseTaxes) {
+        return false;
+    }
     var $address = jQuery('#wpi-billing');
     if (!state) {
         state = $address.find('#wpinv_state').val();
@@ -596,8 +601,17 @@ function wpinv_recalculate_taxes(state) {
         success: function(res) {
             jQuery('#wpinv_checkout_cart_wrap').unblock();
             if (res && typeof res == 'object') {
+                var $wrap = jQuery('#wpinv_checkout_form_wrap');
                 jQuery('#wpinv_checkout_cart_form').replaceWith(res.html);
-                jQuery('.wpinv-chdeckout-total', jQuery('#wpinv_checkout_form_wrap')).text(res.total);
+                jQuery('.wpinv-chdeckout-total', $wrap).text(res.total);
+                if (res.free) {
+                    jQuery('#wpinv_payment_mode_select', $wrap).hide();
+                    gw = 'manual';
+                } else {
+                    jQuery('#wpinv_payment_mode_select', $wrap).show();
+                    gw = jQuery('#wpinv_payment_mode_select', $wrap).attr('data-gateway');
+                }
+                jQuery('.wpi-payment_methods .wpi-pmethod[value="' + gw + '"]', $wrap).attr('checked', true);
                 var data = new Object();
                 data.post = postData;
                 data.response = res;
