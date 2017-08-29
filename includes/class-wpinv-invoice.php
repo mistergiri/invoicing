@@ -333,6 +333,10 @@ final class WPInv_Invoice {
             }
         }
 
+        if($amount < 0){
+            $amount = 0;
+        }
+
         return $amount;
     }
     
@@ -1973,7 +1977,7 @@ final class WPInv_Invoice {
         return apply_filters( 'wpinv_needs_payment', $needs_payment, $this, $valid_invoice_statuses );
     }
     
-    public function get_checkout_payment_url( $on_checkout = false, $secret = false ) {
+    public function get_checkout_payment_url( $with_key = false, $secret = false ) {
         $pay_url = wpinv_get_checkout_uri();
 
         if ( is_ssl() ) {
@@ -1982,7 +1986,7 @@ final class WPInv_Invoice {
         
         $key = $this->get_key();
 
-        if ( $on_checkout ) {
+        if ( $with_key ) {
             $pay_url = add_query_arg( 'invoice_key', $key, $pay_url );
         } else {
             $pay_url = add_query_arg( array( 'wpi_action' => 'pay_for_invoice', 'invoice_key' => $key ), $pay_url );
@@ -1992,17 +1996,17 @@ final class WPInv_Invoice {
             $pay_url = add_query_arg( array( '_wpipay' => md5( $this->get_user_id() . '::' . $this->get_email() . '::' . $key ) ), $pay_url );
         }
 
-        return apply_filters( 'wpinv_get_checkout_payment_url', $pay_url, $this );
+        return apply_filters( 'wpinv_get_checkout_payment_url', $pay_url, $this, $with_key, $secret );
     }
     
-    public function get_view_url( $secret = false ) {
-        $print_url = get_permalink( $this->ID );
-        
-        if ( $secret ) {
-            $print_url = add_query_arg( array( '_wpipay' => md5( $this->get_user_id() . '::' . $this->get_email() . '::' . $this->get_key() ) ), $print_url );
+    public function get_view_url( $with_key = false ) {
+        $invoice_url = get_permalink( $this->ID );
+
+        if ( $with_key ) {
+            $invoice_url = add_query_arg( 'invoice_key', $this->get_key(), $invoice_url );
         }
 
-        return apply_filters( 'wpinv_get_view_url', $print_url, $this );
+        return apply_filters( 'wpinv_get_view_url', $invoice_url, $this, $with_key );
     }
     
     public function generate_key( $string = '' ) {
@@ -2761,6 +2765,12 @@ final class WPInv_Invoice {
         }
         
         return false;
+    }
+    
+    public function is_refunded() {
+        $is_refunded = $this->has_status( array( 'wpi-refunded' ) );
+
+        return apply_filters( 'wpinv_invoice_is_refunded', $is_refunded, $this );
     }
     
     public function is_free() {

@@ -52,35 +52,27 @@ function wpinv_display_invoice_top_bar( $invoice ) {
 
 function wpinv_invoice_display_left_actions( $invoice ) {
     if ( empty( $invoice ) ) {
-        return;
+        return; // Exit if invoice is not set.
     }
     
-    if($invoice->post_type == 'wpi_invoice'){
-    
-        $user_id = (int)$invoice->get_user_id();
-        $current_user_id = (int)get_current_user_id();
-
-        if ( $user_id > 0 && $user_id == $current_user_id && $invoice->needs_payment() ) {
-            ?> 
-            <a class="btn btn-success btn-sm" title="<?php esc_attr_e( 'Pay This Invoice', 'invoicing' ); ?>" href="<?php echo esc_url( $invoice->get_checkout_payment_url() ); ?>"><?php _e( 'Pay For Invoice', 'invoicing' ); ?></a>
-            <?php
+    if ( $invoice->post_type == 'wpi_invoice' ) {
+        if ( $invoice->needs_payment() ) {
+            ?> <a class="btn btn-success btn-sm" title="<?php esc_attr_e( 'Pay This Invoice', 'invoicing' ); ?>" href="<?php echo esc_url( $invoice->get_checkout_payment_url() ); ?>"><?php _e( 'Pay For Invoice', 'invoicing' ); ?></a><?php
         }
     }
     do_action('wpinv_invoice_display_left_actions', $invoice);
 }
 
 function wpinv_invoice_display_right_actions( $invoice ) {
-    if ( empty( $invoice ) ) return; //Exit if invoice is not set.
-    
-    if($invoice->post_type == 'wpi_invoice'){
-        $user_id = (int)$invoice->get_user_id();
-        $current_user_id = (int)get_current_user_id();
+    if ( empty( $invoice ) ) {
+        return; // Exit if invoice is not set.
+    }
 
-        if ( $user_id > 0 && $user_id == $current_user_id ) {
-        ?>
-            <a class="btn btn-primary btn-sm" onclick="window.print();" href="javascript:void(0)"><?php _e( 'Print Invoice', 'invoicing' ); ?></a> &nbsp;
-            <a class="btn btn-warning btn-sm" href="<?php echo esc_url( wpinv_get_history_page_uri() ); ?>"><?php _e( 'Invoice History', 'invoicing' ); ?></a>
-        <?php } 
+    if ( $invoice->post_type == 'wpi_invoice' ) { ?>
+        <a class="btn btn-primary btn-sm" onclick="window.print();" href="javascript:void(0)"><?php _e( 'Print Invoice', 'invoicing' ); ?></a>
+        <?php if ( is_user_logged_in() ) { ?>
+        &nbsp;&nbsp;<a class="btn btn-warning btn-sm" href="<?php echo esc_url( wpinv_get_history_page_uri() ); ?>"><?php _e( 'Invoice History', 'invoicing' ); ?></a>
+        <?php }
     }
     do_action('wpinv_invoice_display_right_actions', $invoice);
 }
@@ -792,24 +784,10 @@ function wpinv_template( $template ) {
     global $post, $wp_query;
     
     if ( ( is_single() || is_404() ) && !empty( $post->ID ) && (get_post_type( $post->ID ) == 'wpi_invoice' or get_post_type( $post->ID ) == 'wpi_quote')) {
-        if ( wpinv_user_can_print_invoice( $post->ID ) ) {
+        if ( wpinv_user_can_view_invoice( $post->ID ) ) {
             $template = wpinv_get_template_part( 'wpinv-invoice-print', false, false );
         } else {
-            if ( !is_user_logged_in() && !empty( $_REQUEST['_wpipay'] ) && $invoice = wpinv_get_invoice( $post->ID ) ) {
-                $user_id = $invoice->get_user_id();
-                $secret = sanitize_text_field( $_GET['_wpipay'] );
-
-                if ( $secret === md5( $user_id . '::' . $invoice->get_email() . '::' . $invoice->get_key() ) ) { // valid invoice link
-                    $redirect_to = remove_query_arg( '_wpipay', get_permalink() );
-
-                    wpinv_guest_redirect( $redirect_to, $user_id );
-                    wpinv_die();
-                }
-            }
-            $redirect_to = is_user_logged_in() ? wpinv_get_history_page_uri() : wp_login_url( get_permalink() );
-
-            wp_redirect( $redirect_to );
-            wpinv_die();
+            $template = wpinv_get_template_part( 'wpinv-invalid-access', false, false );
         }
     }
 
@@ -859,7 +837,7 @@ function wpinv_display_from_address() {
         <div class="address"><?php echo wpautop( wp_kses_post( $address ) );?></div>
         <?php } ?>
         <?php if ( $email_from = wpinv_mail_get_from_address() ) { ?>
-        <div class="email_from"><?php echo wp_sprintf( __( 'Email: %s' ), $email_from );?></div>
+        <div class="email_from"><?php echo wp_sprintf( __( 'Email: %s', 'invoicing' ), $email_from );?></div>
         <?php } ?>
     </div>
     <?php
@@ -880,6 +858,9 @@ function wpinv_get_watermark( $id ) {
     if ( !empty( $invoice ) && "wpi_invoice" === $invoice->post_type ) {
         if ( $invoice->is_paid() ) {
             return __( 'Paid', 'invoicing' );
+        }
+        if ( $invoice->is_refunded() ) {
+            return __( 'Refunded', 'invoicing' );
         }
         if ( $invoice->has_status( array( 'wpi-cancelled' ) ) ) {
             return __( 'Cancelled', 'invoicing' );
@@ -1007,10 +988,10 @@ function wpinv_display_to_address( $invoice_id = 0 ) {
     }
     
     if ( $phone = $invoice->get_phone() ) {
-        $output .= '<div class="phone">' . wp_sprintf( __( 'Phone: %s' ), esc_html( $phone ) ) . '</div>';
+        $output .= '<div class="phone">' . wp_sprintf( __( 'Phone: %s', 'invoicing' ), esc_html( $phone ) ) . '</div>';
     }
     if ( $email = $invoice->get_email() ) {
-        $output .= '<div class="email">' . wp_sprintf( __( 'Email: %s' ), esc_html( $email ) ) . '</div>';
+        $output .= '<div class="email">' . wp_sprintf( __( 'Email: %s' , 'invoicing'), esc_html( $email ) ) . '</div>';
     }
     
     ob_start();
@@ -1218,7 +1199,7 @@ function wpinv_display_payments_info( $invoice_id = 0, $echo = true ) {
     
     ob_start();
     do_action( 'wpinv_before_display_payments_info', $invoice_id );
-    if ( ( $gateway_title = $invoice->get_gateway_title() ) || $invoice->is_paid() ) {
+    if ( ( $gateway_title = $invoice->get_gateway_title() ) || $invoice->is_paid() || $invoice->is_refunded() ) {
         ?>
         <div class="wpi-payment-info">
             <p class="wpi-payment-gateway"><?php echo wp_sprintf( __( 'Payment via %s', 'invoicing' ), $gateway_title ? $gateway_title : __( 'Manually', 'invoicing' ) ); ?></p>
@@ -1245,6 +1226,7 @@ function wpinv_display_style( $invoice ) {
     wp_print_styles( 'wpinv-single-style' );
 }
 add_action( 'wpinv_invoice_print_head', 'wpinv_display_style' );
+add_action( 'wpinv_invalid_invoice_head', 'wpinv_display_style' );
 
 function wpinv_checkout_billing_details() {  
     $invoice_id = (int)wpinv_get_invoice_cart_id();
@@ -1368,7 +1350,7 @@ function wpinv_admin_get_line_items($invoice = array()) {
                 $line_item .= '<td class="tax">' . $line_item_tax . '</td>';
             }
             $line_item .= '<td class="action">';
-            if ( !$invoice->is_paid() && $can_remove ) {
+            if ( !$invoice->is_paid() && !$invoice->is_refunded() && $can_remove ) {
                 $line_item .= '<i class="fa fa-remove wpinv-item-remove"></i>';
             }
             $line_item .= '</td>';
@@ -1912,18 +1894,23 @@ add_filter( 'the_content', 'wpinv_filter_success_page_content', 99999 );
 
 function wpinv_receipt_actions( $invoice ) {
     if ( !empty( $invoice ) ) {
-        $actions = array(
-            'print'   => array(
-                'url'  => $invoice->get_view_url(),
+        $actions = array();
+
+        if ( wpinv_user_can_view_invoice( $invoice->ID ) ) {
+            $actions['print']   = array(
+                'url'  => $invoice->get_view_url( true ),
                 'name' => __( 'Print Invoice', 'invoicing' ),
                 'class' => 'btn-primary',
-            ),
-            'history'   => array(
+            );
+        }
+
+        if ( is_user_logged_in() ) {
+            $actions['history'] = array(
                 'url'  => wpinv_get_history_page_uri(),
                 'name' => __( 'Invoice History', 'invoicing' ),
                 'class' => 'btn-warning',
-            )
-        );
+            );
+        }
 
         $actions = apply_filters( 'wpinv_invoice_receipt_actions', $actions, $invoice );
         
@@ -2130,3 +2117,37 @@ function wpinv_get_invoice_note_line_item( $note, $echo = true ) {
         return $note_content;
     }
 }
+
+function wpinv_invalid_invoice_content() {
+    global $post;
+
+    $invoice = wpinv_get_invoice( $post->ID );
+
+    $error = __( 'This invoice is only viewable by clicking on the invoice link that sent to you via email.', 'invoicing' );
+    if ( !empty( $invoice->ID ) && $invoice->has_status( array_keys( wpinv_get_invoice_statuses() ) ) ) {
+        if ( is_user_logged_in() ) {
+            if ( wpinv_require_login_to_checkout() ) {
+                if ( isset( $_GET['invoice_key'] ) && $_GET['invoice_key'] === $invoice->get_key() ) {
+                    $error = __( 'You are not allowed to view this invoice.', 'invoicing' );
+                }
+            }
+        } else {
+            if ( wpinv_require_login_to_checkout() ) {
+                if ( isset( $_GET['invoice_key'] ) && $_GET['invoice_key'] === $invoice->get_key() ) {
+                    $error = __( 'You must be logged in to view this invoice.', 'invoicing' );
+                }
+            }
+        }
+    } else {
+        $error = __( 'This invoice is deleted or does not exist.', 'invoicing' );
+    }
+    ?>
+    <div class="row wpinv-row-invalid">
+        <div class="col-md-6 col-md-offset-3 wpinv-message error">
+            <h3><?php _e( 'Access Denied', 'invoicing' ); ?></h3>
+            <p class="wpinv-msg-text"><?php echo $error; ?></p>
+        </div>
+    </div>
+    <?php
+}
+add_action( 'wpinv_invalid_invoice_content', 'wpinv_invalid_invoice_content' );

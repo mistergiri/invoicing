@@ -72,8 +72,9 @@ class WPInv_Ajax {
             'admin_remove_discount' => false,
             'check_email' => false,
             'run_tool' => false,
-            'apply_discount' => false,
-            'remove_discount' => false,
+            'apply_discount' => true,
+            'remove_discount' => true,
+            'buy_items' => true,
         );
 
         foreach ( $ajax_events as $ajax_event => $nopriv ) {
@@ -165,7 +166,7 @@ class WPInv_Ajax {
             die();
         }
         
-        if ( $invoice->is_paid() ) {
+        if ( $invoice->is_paid() || $invoice->is_refunded() ) {
             die(); // Don't allow modify items for paid invoice.
         }
         
@@ -277,7 +278,7 @@ class WPInv_Ajax {
             die();
         }
         
-        if ( $invoice->is_paid() ) {
+        if ( $invoice->is_paid() || $invoice->is_refunded() ) {
             die(); // Don't allow modify items for paid invoice.
         }
         
@@ -491,7 +492,7 @@ class WPInv_Ajax {
         }
         
         $invoice = wpinv_get_invoice( $invoice_id );
-        if ( empty( $invoice ) || ( !empty( $invoice ) && $invoice->is_paid() ) ) {
+        if ( empty( $invoice ) || ( !empty( $invoice ) && ( $invoice->is_paid() || $invoice->is_refunded() ) ) ) {
             die();
         }
         
@@ -541,7 +542,7 @@ class WPInv_Ajax {
         }
         
         $invoice = wpinv_get_invoice( $invoice_id );
-        if ( empty( $invoice ) || ( !empty( $invoice ) && $invoice->is_paid() ) ) {
+        if ( empty( $invoice ) || ( !empty( $invoice ) && ( $invoice->is_paid() || $invoice->is_refunded() ) ) ) {
             die();
         }
         
@@ -615,6 +616,8 @@ class WPInv_Ajax {
     }
     
     public static function apply_discount() {
+        global $wpi_userID;
+        
         check_ajax_referer( 'wpinv-nonce', '_nonce' );
         
         $response = array();
@@ -626,9 +629,15 @@ class WPInv_Ajax {
             $response['msg']            = '';
             $response['data']['code']   = $discount_code;
             
-            $user = is_user_logged_in() ? get_current_user_id() : '';
+            $invoice = wpinv_get_invoice_cart();
+            if ( empty( $invoice->ID ) ) {
+                $response['msg'] = __( 'Invalid checkout request.', 'invoicing' );
+                wp_send_json( $response );
+            }
 
-            if ( wpinv_is_discount_valid( $discount_code, $user ) ) {
+            $wpi_userID = $invoice->get_user_id();
+
+            if ( wpinv_is_discount_valid( $discount_code, $wpi_userID ) ) {
                 $discount       = wpinv_get_discount_by_code( $discount_code );
                 $discounts      = wpinv_set_cart_discount( $discount_code );
                 $amount         = wpinv_format_discount_rate( wpinv_get_discount_type( $discount->ID ), wpinv_get_discount_amount( $discount->ID ) );
@@ -679,6 +688,174 @@ class WPInv_Ajax {
         }
         
         wp_send_json( $response );
+    }
+
+
+    /**
+     * Lets users buy items via ajax.
+     *
+     * @since 1.0.0
+     */
+    public function buy_items(){
+
+        $user_id = get_current_user_id();
+        if(!$user_id ){ // if not logged in then lets redirect to the login page
+
+            wp_send_json(array(
+                'success' => wp_login_url( wp_get_referer() )
+            ));
+        }else{
+
+            // only check nonce if logged in as it could be cached when logged out.
+            if ( ! isset( $_POST['wpinv_buy_nonce'] ) || ! wp_verify_nonce( $_POST['wpinv_buy_nonce'], 'wpinv_buy_items' ) ) {
+                wp_send_json(array(
+                    'error' => __('Security checks failed.','invoicing')
+                ));
+                wp_die();
+            }
+
+            // allow to set a custom price through post_id
+            $items = $_POST['items'];
+            $related_post_id = isset($_POST['post_id']) ? (int)$_POST['post_id'] : 0;
+            $custom_item_price = $related_post_id ? abs(get_post_meta($related_post_id,'_wpi_custom_price',true)) : 0;
+
+
+            $cart_items = array();
+            if($items){
+                $items = explode(',',$items);
+                foreach($items as $item){
+                    $item_id = $item;
+                    $quantity = 1;
+                    if (strpos($item, '|') !== false) {
+                        $item_parts = explode('|',$item);
+                        $item_id = $item_parts[0];
+                        $quantity = $item_parts[1];
+                    }
+
+                    if($item_id && $quantity){
+                        $cart_items_arr = array(
+                            'id'            => (int)$item_id,
+                            'quantity'      => (int)$quantity
+                        );
+
+                        // if there is a related post id then add it to meta
+                        if($related_post_id){
+                            $cart_items_arr['meta'] = array(
+                                'post_id'   => $related_post_id
+                            );
+                        }
+
+                        // if there is a custom price then set it.
+                        if($custom_item_price){
+                            $cart_items_arr['custom_price'] = $custom_item_price;
+
+                        }
+
+                        $cart_items[] = $cart_items_arr;
+
+                    }
+
+                }
+            }
+
+            /**
+             * Filter the wpinv_buy shortcode cart items on the fly.
+             *
+             * @param array $cart_items The cart items array.
+             * @param int $related_post_id The related post id if any.
+             * @since 1.0.0
+             */
+            $cart_items = apply_filters('wpinv_buy_cart_items',$cart_items,$related_post_id);
+
+
+            //make sure its not in the cart already, if it is then redirect to checkout.
+            $cart_invoice = wpinv_get_invoice_cart();
+            if(isset($cart_invoice->items) && !empty($cart_invoice->items) && !empty($cart_items) && serialize($cart_invoice->items)==serialize($cart_items) ){
+                wp_send_json(array(
+                    'success' =>  $cart_invoice->get_checkout_payment_url()
+                ));
+                wp_die();
+            }
+
+
+            // check if user has invoice with same items waiting to be paid.
+            $user_invoices = wpinv_get_users_invoices( $user_id , 1 , false , 'pending' );
+            if(!empty($user_invoices)){
+
+                foreach($user_invoices as $user_invoice){
+                    $user_cart_details = array();
+                    $invoice  = wpinv_get_invoice( $user_invoice->ID );
+                    $cart_details = $invoice->get_cart_details();
+                    if(!empty($cart_details)){
+                        foreach($cart_details as $invoice_item){
+
+                            $ii_arr = array();
+                            $ii_arr['id'] = (int)$invoice_item['id'];
+                            $ii_arr['quantity'] = (int)$invoice_item['quantity'];
+
+                            if(isset($invoice_item['meta']) && !empty($invoice_item['meta'])){
+                                $ii_arr['meta'] = $invoice_item['meta'];
+                            }
+
+                            if(isset($invoice_item['custom_price']) && !empty($invoice_item['custom_price'])){
+                                $ii_arr['custom_price'] = $invoice_item['custom_price'];
+                            }
+
+                            $user_cart_details[] = $ii_arr;
+
+                        }
+                    }
+
+                    if(!empty($user_cart_details) && serialize($cart_items) == serialize($user_cart_details)){
+                        wp_send_json(array(
+                            'success' =>  $invoice->get_checkout_payment_url()
+                        ));
+                        wp_die();
+                    }
+
+                }
+            }
+            
+
+
+            // Create invoice and send user to checkout
+            if(!empty($cart_items)){
+
+                $invoice_data = array(
+                    'status'        =>  'wpi-pending',
+                    'created_via'   =>  'wpi',
+                    'user_id'       =>  $user_id,
+                    'cart_details'  =>  $cart_items,
+                );
+
+                // default invoice args
+                $invoice_data['status']  = !empty( $invoice_data['status'] ) ? $invoice_data['status'] : 'pending';
+                $invoice_data['user_id'] = !empty( $invoice_data['user_id'] ) ? (int)$invoice_data['user_id'] : get_current_user_id();
+
+                $invoice = wpinv_insert_invoice( $invoice_data, true );
+
+                if(isset($invoice->ID)){
+
+                    wp_send_json(array(
+                        'success' =>  $invoice->get_checkout_payment_url()
+                    ));
+
+                }else{
+                    wp_send_json(array(
+                        'error' => __('Invoice failed to create','invoicing')
+                    ));
+                }
+
+            }else{
+                wp_send_json(array(
+                    'error' => __('Items not valid.','invoicing')
+                ));
+            }
+
+        }
+
+        wp_die();
+
     }
 }
 
